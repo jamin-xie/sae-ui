@@ -6,7 +6,32 @@ type LibraryFilterTab = 'sfx' | 'music'
 type MyAssetCategory = 'all' | 'sfx' | 'music'
 type AnalysisStatus = 'idle' | 'running' | 'done'
 type CuratedAsset = { name: string; tags: string[]; keywords: string[] }
-type MyAsset = { name: string; type: 'sfx' | 'music'; source: '收藏' | '上传' }
+type MyAsset = { name: string; type: 'sfx' | 'music'; source: '收藏' | '上传' | '轨道导入'; aiTags: string[] }
+type ClipContextMenuState = {
+  x: number
+  y: number
+  materialId: string
+  trackName: string
+  blockName: string
+  assetType: 'sfx' | 'music'
+}
+type ClipPlaybackState = {
+  clipKey: string
+  progress: number
+  running: boolean
+}
+type TrackVersion = {
+  id: string
+  label: string
+  summary: string
+  kind: 'original' | 'applied'
+  waveform: number[]
+}
+type ComparePlaybackState = {
+  progress: number
+  running: boolean
+  targetId: string
+}
 type MaterialTab = {
   id: string
   title: string
@@ -22,6 +47,14 @@ const splitTracksTemplate: TrackRow[] = [
   { name: '音效', blocks: ['转场咻声', '按钮点击', '环境氛围'] },
   { name: '背景音', blocks: ['轻电子BGM', '钢琴铺底'] },
 ]
+
+const buildSplitTracks = (title: string): TrackRow[] => {
+  const prefix = title.replace(/\.[^.]+$/, '')
+  return splitTracksTemplate.map((row) => ({
+    name: row.name,
+    blocks: row.blocks.map((block) => `${prefix}-${block}`),
+  }))
+}
 
 const initialMaterialTabs: MaterialTab[] = [
   {
@@ -173,10 +206,24 @@ const curatedMusic: CuratedAsset[] = [
   { name: 'Future Bass', tags: ['电子', '动感', '青年'], keywords: ['drop', '活力', '科技发布'] },
   { name: '氛围环境', tags: ['Ambient', '铺底', '空间'], keywords: ['氛围', '空灵', '背景层'] },
 ]
-const myAssets: MyAsset[] = [
-  { name: '品牌宣传BGM-v2', type: 'music', source: '上传' },
-  { name: '转场点击包-A', type: 'sfx', source: '上传' },
+const initialMyAssets: MyAsset[] = [
+  { name: '品牌宣传BGM-v2', type: 'music', source: '上传', aiTags: ['品牌', '宣传', '温暖'] },
+  { name: '转场点击包-A', type: 'sfx', source: '上传', aiTags: ['转场', '点击', 'UI'] },
 ]
+
+const buildAiTags = (type: 'sfx' | 'music', blockName: string) => {
+  const baseTags = type === 'sfx' ? ['音效', '轨道提取'] : ['音乐', '轨道提取']
+  const rules: Array<[RegExp, string]> = [
+    [/转场|切换|过门/i, '转场'],
+    [/点击|按钮|提示/i, '交互'],
+    [/环境|氛围|ambient/i, '氛围'],
+    [/电子|赛博|pulse/i, '科技'],
+    [/钢琴|piano/i, '钢琴'],
+    [/低频|boom/i, '低频'],
+  ]
+  const matched = rules.filter(([pattern]) => pattern.test(blockName)).map(([, tag]) => tag)
+  return Array.from(new Set([...baseTags, ...matched, 'AI自动标注']))
+}
 
 const getCuratedTags = (assets: CuratedAsset[]) => Array.from(new Set(assets.flatMap((asset) => asset.tags)))
 
@@ -192,6 +239,54 @@ const filterCuratedAssets = (assets: CuratedAsset[], query: string, selectedTags
     return keywordMatched && tagsMatched
   })
 }
+
+const buildWaveform = (seedText: string, strength = 0) => {
+  const seed = Array.from(seedText).reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  return Array.from({ length: 56 }, (_, index) => {
+    const base = (Math.sin((index + seed) * 0.35) + 1) * 22
+    const ripple = (Math.cos((index + seed) * 0.17) + 1) * 12
+    const shape = strength > 10 ? Math.sin((index + seed) * 0.09) * strength * 0.9 : 0
+    const value = 10 + base + ripple + strength + shape
+    return Math.max(6, Math.min(94, Number(value.toFixed(1))))
+  })
+}
+
+const buildDefaultTrackVersions = (trackKey: string): TrackVersion[] => {
+  const original: TrackVersion = {
+    id: `${trackKey}-origin`,
+    label: '原始版本',
+    summary: '轨道初始状态',
+    kind: 'original',
+    waveform: buildWaveform(trackKey, 0),
+  }
+  const v1: TrackVersion = {
+    id: `${trackKey}-v1`,
+    label: '版本 1',
+    summary: '基础降噪 + 轻压缩',
+    kind: 'applied',
+    waveform: buildWaveform(`${trackKey}-v1`, 10),
+  }
+  const v2: TrackVersion = {
+    id: `${trackKey}-v2`,
+    label: '版本 2',
+    summary: '中频增强 + 齿音抑制',
+    kind: 'applied',
+    waveform: buildWaveform(`${trackKey}-v2`, 22),
+  }
+  const v3: TrackVersion = {
+    id: `${trackKey}-v3`,
+    label: '版本 3',
+    summary: '空间感优化 + 动态平衡',
+    kind: 'applied',
+    waveform: buildWaveform(`${trackKey}-v3`, 30),
+  }
+  return [original, v1, v2, v3]
+}
+
+const getDefaultClipLayout = (blockIndex: number) => ({
+  left: blockIndex === 0 ? 2 : 42 + (blockIndex - 1) * 24,
+  width: blockIndex === 0 ? 38 : 22,
+})
 
 export default function App() {
   const [assetTab, setAssetTab] = useState<AssetTab>('sfx')
@@ -217,6 +312,20 @@ export default function App() {
   const [analysisProgress, setAnalysisProgress] = useState(0)
   const [analysisStepIndex, setAnalysisStepIndex] = useState(0)
   const [analysisFinishedAt, setAnalysisFinishedAt] = useState('')
+  const [assetLogs, setAssetLogs] = useState(aiLogs)
+  const [uploadedAssets, setUploadedAssets] = useState<MyAsset[]>(initialMyAssets)
+  const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenuState | null>(null)
+  const [selectedClipKey, setSelectedClipKey] = useState('')
+  const [clipPlayback, setClipPlayback] = useState<ClipPlaybackState>({ clipKey: '', progress: 0, running: false })
+  const [trackVersionsByTrack, setTrackVersionsByTrack] = useState<Record<string, TrackVersion[]>>({})
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [compareSource, setCompareSource] = useState<'current' | 'history'>('current')
+  const [compareHistoryId, setCompareHistoryId] = useState('')
+  const [comparePlayback, setComparePlayback] = useState<ComparePlaybackState>({
+    progress: 0,
+    running: false,
+    targetId: '',
+  })
   const [clonedVoiceItems, setClonedVoiceItems] = useState<string[]>(initialClonedVoices)
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const [cloneMethod, setCloneMethod] = useState<'record' | 'upload'>('record')
@@ -228,6 +337,16 @@ export default function App() {
   const selectedTrackName = selectedTrackKey.split('::')[1]
   const selectedTrack = activeMaterial?.tracks.find((track) => track.name === selectedTrackName) ?? activeMaterial?.tracks[0]
   const selectedTuning = selectedTrack ? getTrackTuning(selectedTrack.name) : null
+  const trackVersions = selectedTrackKey ? trackVersionsByTrack[selectedTrackKey] ?? [] : []
+  const originalVersion = trackVersions.find((version) => version.kind === 'original')
+  const appliedVersions = trackVersions.filter((version) => version.kind === 'applied')
+  const latestAppliedVersion = appliedVersions.at(-1)
+  const previousAppliedVersions = appliedVersions.slice(0, -1)
+  const latestVersionForCompare = latestAppliedVersion ?? originalVersion
+  const compareTargetVersion =
+    compareSource === 'current'
+      ? latestVersionForCompare
+      : previousAppliedVersions.find((version) => version.id === compareHistoryId) ?? previousAppliedVersions.at(-1)
   const toneOptions = Array.from(new Set([...clonedVoiceItems, ...curatedVoices.map((asset) => asset.name)]))
   const activeTone = selectedTrackKey ? selectedToneByTrack[selectedTrackKey] ?? toneOptions[0] : toneOptions[0]
   const activeSpeechRate = selectedTrackKey ? speechRateByTrack[selectedTrackKey] ?? 1 : 1
@@ -235,12 +354,12 @@ export default function App() {
   const filteredCuratedSfx = filterCuratedAssets(curatedSfx, curatedQuery.sfx, selectedCuratedTags.sfx)
   const filteredCuratedMusic = filterCuratedAssets(curatedMusic, curatedQuery.music, selectedCuratedTags.music)
   const myCollectionAssets: MyAsset[] = [
-    ...mySfx.map((name) => ({ name, type: 'sfx' as const, source: '收藏' as const })),
-    ...myMusic.map((name) => ({ name, type: 'music' as const, source: '收藏' as const })),
-    ...myAssets,
+    ...mySfx.map((name) => ({ name, type: 'sfx' as const, source: '收藏' as const, aiTags: [] })),
+    ...myMusic.map((name) => ({ name, type: 'music' as const, source: '收藏' as const, aiTags: [] })),
+    ...uploadedAssets,
   ]
   const filteredMyAssets = myCollectionAssets.filter((asset) => myAssetCategory === 'all' || asset.type === myAssetCategory)
-  const filteredUploadedAssets = myAssets.filter((asset) => uploadCategory === 'all' || asset.type === uploadCategory)
+  const filteredUploadedAssets = uploadedAssets.filter((asset) => uploadCategory === 'all' || asset.type === uploadCategory)
   const curatedVoiceTags = getCuratedTags(curatedVoices)
   const curatedSfxTags = getCuratedTags(curatedSfx)
   const curatedMusicTags = getCuratedTags(curatedMusic)
@@ -253,6 +372,49 @@ export default function App() {
       setSelectedTrackKey(`${activeMaterial.id}::${activeMaterial.tracks[0].name}`)
     }
   }, [activeMaterial, selectedTrackKey])
+
+  useEffect(() => {
+    if (!selectedTrackKey || !selectedTrack) return
+    setTrackVersionsByTrack((prev) => {
+      if (prev[selectedTrackKey]) return prev
+      return { ...prev, [selectedTrackKey]: buildDefaultTrackVersions(selectedTrackKey) }
+    })
+  }, [selectedTrackKey, selectedTrack])
+
+  useEffect(() => {
+    if (!compareOpen) return
+    if (compareSource === 'history') {
+      if (previousAppliedVersions.length === 0) {
+        setCompareSource('current')
+        setCompareHistoryId('')
+        return
+      }
+      const exists = previousAppliedVersions.some((version) => version.id === compareHistoryId)
+      if (!exists) setCompareHistoryId(previousAppliedVersions.at(-1)?.id ?? '')
+    } else {
+      setCompareHistoryId('')
+    }
+  }, [compareOpen, compareSource, compareHistoryId, previousAppliedVersions])
+
+  useEffect(() => {
+    if (!compareOpen || !compareTargetVersion) {
+      setComparePlayback((prev) => ({ ...prev, running: false }))
+      return
+    }
+    setComparePlayback({ progress: 0, running: true, targetId: compareTargetVersion.id })
+  }, [compareOpen, compareSource, compareHistoryId, compareTargetVersion?.id])
+
+  useEffect(() => {
+    if (!comparePlayback.running) return
+    const timer = setInterval(() => {
+      setComparePlayback((prev) => {
+        const next = prev.progress + 2.4
+        if (next >= 100) return { ...prev, progress: 100, running: false }
+        return { ...prev, progress: next }
+      })
+    }, 45)
+    return () => clearInterval(timer)
+  }, [comparePlayback.running])
 
   useEffect(() => {
     if (analysisStatus !== 'running') return
@@ -283,6 +445,31 @@ export default function App() {
     return () => clearInterval(timer)
   }, [isRecording])
 
+  useEffect(() => {
+    if (!clipContextMenu) return
+    const closeMenu = () => setClipContextMenu(null)
+    window.addEventListener('click', closeMenu)
+    window.addEventListener('scroll', closeMenu, true)
+    return () => {
+      window.removeEventListener('click', closeMenu)
+      window.removeEventListener('scroll', closeMenu, true)
+    }
+  }, [clipContextMenu])
+
+  useEffect(() => {
+    if (!clipPlayback.running) return
+    const timer = setInterval(() => {
+      setClipPlayback((prev) => {
+        const next = prev.progress + 2.5
+        if (next >= 100) {
+          return { ...prev, progress: 100, running: false }
+        }
+        return { ...prev, progress: next }
+      })
+    }, 40)
+    return () => clearInterval(timer)
+  }, [clipPlayback.running])
+
   const addMaterialTab = () => {
     const newId = `mat-${Date.now()}`
     const newTab: MaterialTab = {
@@ -305,6 +492,23 @@ export default function App() {
       }
       return next
     })
+  }
+
+  const splitActiveMaterial = () => {
+    if (!activeMaterial) return
+    setMaterialTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== activeMaterial.id) return tab
+        if (tab.split) return tab
+        return {
+          ...tab,
+          split: true,
+          tracks: buildSplitTracks(tab.title),
+        }
+      }),
+    )
+    setSelectedTrackKey(`${activeMaterial.id}::视频`)
+    setAssetLogs((prev) => [`拆轨完成：素材「${activeMaterial.title}」已拆分为视频/人声/音效/背景音轨。`, ...prev])
   }
 
   const toggleCuratedTag = (tab: LibraryFilterTab, tag: string) => {
@@ -373,6 +577,74 @@ export default function App() {
     }
     closeCloneDialog()
   }
+
+  const importClipAsAsset = () => {
+    if (!clipContextMenu) return
+    const { blockName, trackName, assetType } = clipContextMenu
+    const aiTags = buildAiTags(assetType, blockName)
+    const existingCount = uploadedAssets.filter((asset) => asset.type === assetType && asset.name.startsWith(blockName)).length
+    const name = existingCount === 0 ? blockName : `${blockName}-${existingCount + 1}`
+    const nextAsset: MyAsset = { name, type: assetType, source: '轨道导入', aiTags }
+    setUploadedAssets((prev) => [nextAsset, ...prev])
+    setAssetTab('my_assets')
+    setUploadPanelOpen(true)
+    setUploadCategory(assetType)
+    setAssetLogs((prev) => [
+      `资产导入：已从${trackName}片段「${blockName}」导入到${assetType === 'sfx' ? '音效资产' : '音乐资产'}（AI标签：${aiTags.join(' / ')}）`,
+      ...prev,
+    ])
+    setClipContextMenu(null)
+  }
+
+  const applyCurrentTuning = () => {
+    if (!selectedTrack || !selectedTuning) return
+    const summary =
+      tuningTab === 'tone'
+        ? `音色=${activeTone}`
+        : tuningTab === 'speed'
+          ? `语速=${activeSpeechRate.toFixed(2)}x`
+          : `${selectedTuning.controls
+              .slice(0, 2)
+              .map((control) => `${control.label}${control.amount}`)
+              .join('，')}`
+    const strength = tuningTab === 'tone' ? 9 : tuningTab === 'speed' ? Math.round((activeSpeechRate - 1) * 20) : 6
+    const versionId = `${Date.now()}`
+    const nextVersion: TrackVersion = {
+      id: versionId,
+      label: `版本 ${appliedVersions.length + 1}`,
+      summary,
+      kind: 'applied',
+      waveform: buildWaveform(`${selectedTrackKey}-${versionId}`, strength),
+    }
+    setTrackVersionsByTrack((prev) => {
+      const current = prev[selectedTrackKey] ?? buildDefaultTrackVersions(selectedTrackKey)
+      return { ...prev, [selectedTrackKey]: [...current, nextVersion] }
+    })
+    setCompareOpen(false)
+    setCompareSource('current')
+    setCompareHistoryId('')
+    setAssetLogs((prev) => [`精调应用：${selectedTrack.name} 已应用参数（${summary}）`, ...prev])
+    const fallbackBlock = selectedTrack.blocks[0]
+    const targetClipKey =
+      selectedClipKey || (activeMaterial && fallbackBlock ? `${activeMaterial.id}::${selectedTrack.name}::${fallbackBlock}` : '')
+    if (!targetClipKey) return
+    setSelectedClipKey(targetClipKey)
+    setClipPlayback({ clipKey: targetClipKey, progress: 0, running: true })
+  }
+
+  const activePlayheadPercent = (() => {
+    if (!activeMaterial || !clipPlayback.clipKey) return 0
+    const parts = clipPlayback.clipKey.split('::')
+    if (parts.length < 3) return 0
+    const [, trackName, ...blockParts] = parts
+    const blockName = blockParts.join('::')
+    const track = activeMaterial.tracks.find((row) => row.name === trackName)
+    if (!track) return 0
+    const blockIndex = track.blocks.findIndex((block) => block === blockName)
+    if (blockIndex < 0) return 0
+    const layout = getDefaultClipLayout(blockIndex)
+    return layout.left + (layout.width * clipPlayback.progress) / 100
+  })()
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_color-mix(in_oklch,var(--primary)_16%,transparent),transparent_42%)] p-2 text-foreground md:p-3">
@@ -471,12 +743,26 @@ export default function App() {
                           {filteredUploadedAssets.map((asset) => (
                             <article
                               key={`upload-${asset.type}-${asset.name}`}
-                              className="flex items-center justify-between rounded-md border border-border bg-background/60 px-2 py-1.5"
+                              className="rounded-md border border-border bg-background/60 px-2 py-1.5"
                             >
-                              <p className="truncate pr-2 text-[11px] font-medium">{asset.name}</p>
-                              <span className="shrink-0 text-[10px] text-primary">
-                                {asset.type === 'sfx' ? '音效上传' : '音乐上传'}
-                              </span>
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <p className="truncate pr-2 text-[11px] font-medium">{asset.name}</p>
+                                <span className="shrink-0 text-[10px] text-primary">
+                                  {asset.type === 'sfx' ? '音效' : '音乐'}·{asset.source}
+                                </span>
+                              </div>
+                              {asset.aiTags.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {asset.aiTags.map((tag) => (
+                                    <span
+                                      key={`${asset.name}-${tag}`}
+                                      className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary"
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </article>
                           ))}
                         </div>
@@ -653,17 +939,24 @@ export default function App() {
             <section className="border-t border-border/70 pt-2">
               <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">AI 操作日志</h2>
-                <div className="flex gap-1.5 text-[11px]">
-                  <button className="rounded-md border border-border px-2 py-1">试听</button>
-                  <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
-                    应用当前版本
-                  </button>
-                </div>
               </div>
               <div className="space-y-1.5">
-                {aiLogs.map((log) => (
-                  <article key={log} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-[11px]">
-                    {log}
+                {assetLogs.map((log, index) => (
+                  <article
+                    key={`${index}-${log}`}
+                    className="group rounded-md border border-border bg-background/70 px-2 py-1.5 text-[11px]"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="pr-2">{log}</p>
+                      <div className="hidden shrink-0 gap-1 group-hover:flex group-focus-within:flex">
+                        <button className="rounded-md border border-border bg-card px-1.5 py-0.5 text-[10px]">
+                          试听
+                        </button>
+                        <button className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                          应用当前版本
+                        </button>
+                      </div>
+                    </div>
                   </article>
                 ))}
               </div>
@@ -675,9 +968,8 @@ export default function App() {
               <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">预览区</h2>
                 <div className="flex gap-2 text-xs">
-                  <button className="rounded-md border border-border bg-background px-2 py-1">拆轨</button>
-                  <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
-                    智能分析
+                  <button onClick={splitActiveMaterial} className="rounded-md border border-border bg-background px-2 py-1">
+                    拆轨
                   </button>
                 </div>
               </div>
@@ -751,7 +1043,10 @@ export default function App() {
                       </div>
                     </div>
                     <div className="relative">
-                      <div className="pointer-events-none absolute bottom-0 left-[190px] top-0 w-px bg-foreground/55" />
+                      <div
+                        className="pointer-events-none absolute bottom-0 top-0 z-30 w-[2px] bg-black/75"
+                        style={{ left: `calc(160px + (100% - 160px) * ${activePlayheadPercent / 100})` }}
+                      />
                       {activeMaterial.tracks.map((row) => {
                         const meta = getTrackMeta(row.name)
                         const isAudio = meta.type !== 'video'
@@ -780,21 +1075,44 @@ export default function App() {
                             <div className="relative overflow-hidden bg-background p-1.5">
                               <div className="absolute inset-0 bg-[repeating-linear-gradient(to_right,transparent_0,transparent_95px,rgba(0,0,0,0.05)_96px)]" />
                               <div className="relative flex min-h-12 items-center gap-2">
-                                {row.blocks.map((block, blockIndex) => (
-                                  <span
-                                    key={block}
-                                    className={`group relative overflow-hidden rounded-md border px-2 py-1 text-[11px] ${isAudio
-                                        ? 'border-sky-300/80 bg-sky-100 text-sky-900'
-                                        : 'border-cyan-300/80 bg-cyan-100 text-cyan-900'
-                                      }`}
-                                    style={{ width: `${blockIndex === 0 ? 38 : 22}%` }}
-                                  >
-                                    <span className="relative z-10 truncate">{block}</span>
-                                    {isAudio && (
-                                      <span className="pointer-events-none absolute inset-0 opacity-35 [background:repeating-linear-gradient(90deg,transparent_0,transparent_6px,rgba(2,132,199,.45)_6px,rgba(2,132,199,.45)_8px)]" />
-                                    )}
-                                  </span>
-                                ))}
+                                {row.blocks.map((block, blockIndex) => {
+                                  const clipKey = `${activeMaterial.id}::${row.name}::${block}`
+                                  const clipSelected = selectedClipKey === clipKey
+                                  return (
+                                    <span
+                                      key={block}
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        setSelectedClipKey(clipKey)
+                                      }}
+                                      onContextMenu={(event) => {
+                                        if (!(meta.type === 'sfx' || meta.type === 'bgm')) return
+                                        event.preventDefault()
+                                        event.stopPropagation()
+                                        setSelectedClipKey(clipKey)
+                                        setSelectedTrackKey(`${activeMaterial.id}::${row.name}`)
+                                        setClipContextMenu({
+                                          x: event.clientX,
+                                          y: event.clientY,
+                                          materialId: activeMaterial.id,
+                                          trackName: row.name,
+                                          blockName: block,
+                                          assetType: meta.type === 'sfx' ? 'sfx' : 'music',
+                                        })
+                                      }}
+                                      className={`group relative overflow-hidden rounded-md border px-2 py-1 text-[11px] ${isAudio
+                                          ? 'border-sky-300/80 bg-sky-100 text-sky-900'
+                                          : 'border-cyan-300/80 bg-cyan-100 text-cyan-900'
+                                        } ${clipSelected ? 'ring-2 ring-primary/35' : ''}`}
+                                      style={{ width: `${blockIndex === 0 ? 38 : 22}%` }}
+                                    >
+                                      <span className="relative z-10 truncate">{block}</span>
+                                      {isAudio && (
+                                        <span className="pointer-events-none absolute inset-0 opacity-35 [background:repeating-linear-gradient(90deg,transparent_0,transparent_6px,rgba(2,132,199,.45)_6px,rgba(2,132,199,.45)_8px)]" />
+                                      )}
+                                    </span>
+                                  )
+                                })}
                               </div>
                             </div>
                           </div>
@@ -1133,9 +1451,95 @@ export default function App() {
                     </div>
                   )}
 
+                  {compareOpen && latestVersionForCompare && compareTargetVersion && (
+                    <div className="space-y-1.5 rounded-md border border-border bg-background/70 p-2">
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span className="text-muted-foreground">对比来源：</span>
+                        <button
+                          onClick={() => setCompareSource('current')}
+                          className={`rounded-md border px-1.5 py-0.5 ${
+                            compareSource === 'current'
+                              ? 'border-primary/40 bg-primary/15 text-primary'
+                              : 'border-border bg-card text-muted-foreground'
+                          }`}
+                        >
+                          当前版本
+                        </button>
+                        <button
+                          onClick={() => setCompareSource('history')}
+                          disabled={previousAppliedVersions.length === 0}
+                          className={`rounded-md border px-1.5 py-0.5 ${
+                            compareSource === 'history'
+                              ? 'border-primary/40 bg-primary/15 text-primary'
+                              : 'border-border bg-card text-muted-foreground'
+                          } ${previousAppliedVersions.length === 0 ? 'cursor-not-allowed opacity-50' : ''}`}
+                        >
+                          往期版本
+                        </button>
+                        {compareSource === 'history' && previousAppliedVersions.length > 0 && (
+                          <select
+                            value={compareHistoryId || previousAppliedVersions.at(-1)?.id || ''}
+                            onChange={(event) => setCompareHistoryId(event.target.value)}
+                            className="h-6 rounded-md border border-border bg-card px-1.5 text-[11px]"
+                          >
+                            {previousAppliedVersions.map((version) => (
+                              <option key={version.id} value={version.id}>
+                                {version.label}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                      <div className="rounded-md border border-border bg-card p-2">
+                        <div className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>当前：{latestVersionForCompare.label}</span>
+                          <span>对比：{compareTargetVersion.label}</span>
+                        </div>
+                        <div className="relative h-20 overflow-hidden rounded bg-muted/40">
+                          <div className="absolute inset-0 bg-[repeating-linear-gradient(to_right,transparent_0,transparent_16px,rgba(0,0,0,0.06)_17px)]" />
+                          <div className="absolute inset-0">
+                            {compareTargetVersion.waveform.map((value, index) => (
+                              <span
+                                key={`cmp-${index}`}
+                                className="absolute bottom-0 w-[2px] rounded-t bg-slate-400/70"
+                                style={{ left: `${(index / compareTargetVersion.waveform.length) * 100}%`, height: `${value}%` }}
+                              />
+                            ))}
+                          </div>
+                          <div className="absolute inset-0">
+                            {latestVersionForCompare.waveform.map((value, index) => (
+                              <span
+                                key={`cur-${index}`}
+                                className="absolute bottom-0 w-[2px] rounded-t bg-primary/80"
+                                style={{ left: `${(index / latestVersionForCompare.waveform.length) * 100}%`, height: `${value}%` }}
+                              />
+                            ))}
+                          </div>
+                          <span
+                            className="pointer-events-none absolute bottom-0 top-0 z-20 w-[2px] bg-black/75"
+                            style={{ left: `calc(${comparePlayback.progress}% - 1px)` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex justify-end gap-2 text-[11px]">
                     <button className="rounded-md border border-border bg-card px-2 py-1">重置</button>
-                    <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
+                    <button
+                      onClick={() => setCompareOpen((prev) => !prev)}
+                      className={`rounded-md border px-2 py-1 ${
+                        compareOpen
+                          ? 'border-primary/40 bg-primary/15 text-primary'
+                          : 'border-border bg-card text-muted-foreground'
+                      }`}
+                    >
+                      {compareOpen ? '关闭对比' : '对比'}
+                    </button>
+                    <button
+                      onClick={applyCurrentTuning}
+                      className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary"
+                    >
                       应用到轨道
                     </button>
                   </div>
@@ -1246,6 +1650,24 @@ export default function App() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {clipContextMenu && (
+          <div
+            className="fixed z-[60] min-w-44 rounded-md border border-border bg-card p-1.5 shadow-xl"
+            style={{ left: clipContextMenu.x + 8, top: clipContextMenu.y + 8 }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              onClick={importClipAsAsset}
+              className="w-full rounded-md px-2 py-1.5 text-left text-[11px] hover:bg-accent/60"
+            >
+              {clipContextMenu.assetType === 'sfx' ? '导入音效资产' : '导入音乐资产'}
+            </button>
+            <p className="px-2 pt-1 text-[10px] text-muted-foreground">
+              片段：{clipContextMenu.blockName}
+            </p>
           </div>
         )}
 
