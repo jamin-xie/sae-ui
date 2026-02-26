@@ -146,7 +146,7 @@ const analysisResultCards = [
 
 const analysisRisks = ['口型偏差：中', '爆破音冲突：低', '背景噪声叠加：中低']
 
-const clonedVoices = ['点击克隆', '音色01', '音色02']
+const initialClonedVoices = ['音色01', '音色02']
 const curatedVoices: CuratedAsset[] = [
   { name: '机器人2', tags: ['AI声线', '科技', '中性'], keywords: ['机器人', '电子', '解说'] },
   { name: '怪物2', tags: ['角色', '低沉', '电影感'], keywords: ['怪物', '反派', '预告片'] },
@@ -217,13 +217,18 @@ export default function App() {
   const [analysisProgress, setAnalysisProgress] = useState(0)
   const [analysisStepIndex, setAnalysisStepIndex] = useState(0)
   const [analysisFinishedAt, setAnalysisFinishedAt] = useState('')
+  const [clonedVoiceItems, setClonedVoiceItems] = useState<string[]>(initialClonedVoices)
+  const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
+  const [cloneMethod, setCloneMethod] = useState<'record' | 'upload'>('record')
+  const [cloneNameInput, setCloneNameInput] = useState('')
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordSeconds, setRecordSeconds] = useState(0)
+  const [uploadedAudioName, setUploadedAudioName] = useState('')
   const activeMaterial = materialTabs.find((tab) => tab.id === activeMaterialId)
   const selectedTrackName = selectedTrackKey.split('::')[1]
   const selectedTrack = activeMaterial?.tracks.find((track) => track.name === selectedTrackName) ?? activeMaterial?.tracks[0]
   const selectedTuning = selectedTrack ? getTrackTuning(selectedTrack.name) : null
-  const toneOptions = Array.from(
-    new Set([...clonedVoices.filter((name) => name !== '点击克隆'), ...curatedVoices.map((asset) => asset.name)]),
-  )
+  const toneOptions = Array.from(new Set([...clonedVoiceItems, ...curatedVoices.map((asset) => asset.name)]))
   const activeTone = selectedTrackKey ? selectedToneByTrack[selectedTrackKey] ?? toneOptions[0] : toneOptions[0]
   const activeSpeechRate = selectedTrackKey ? speechRateByTrack[selectedTrackKey] ?? 1 : 1
   const filteredCuratedVoices = filterCuratedAssets(curatedVoices, toneQuery, selectedToneTags)
@@ -269,6 +274,14 @@ export default function App() {
       clearTimeout(completeTimer)
     }
   }, [analysisStatus])
+
+  useEffect(() => {
+    if (!isRecording) return
+    const timer = setInterval(() => {
+      setRecordSeconds((prev) => prev + 1)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [isRecording])
 
   const addMaterialTab = () => {
     const newId = `mat-${Date.now()}`
@@ -333,6 +346,32 @@ export default function App() {
     setAnalysisProgress(2)
     setAnalysisStepIndex(0)
     setAnalysisFinishedAt('')
+  }
+
+  const openCloneDialog = () => {
+    setCloneDialogOpen(true)
+    setCloneMethod('record')
+    setCloneNameInput('')
+    setIsRecording(false)
+    setRecordSeconds(0)
+    setUploadedAudioName('')
+  }
+
+  const closeCloneDialog = () => {
+    setCloneDialogOpen(false)
+    setIsRecording(false)
+  }
+
+  const submitClone = () => {
+    const name = cloneNameInput.trim()
+    if (!name) return
+    const ready = cloneMethod === 'record' ? recordSeconds >= 3 : Boolean(uploadedAudioName)
+    if (!ready) return
+    setClonedVoiceItems((prev) => (prev.includes(name) ? prev : [name, ...prev]))
+    if (selectedTrackKey) {
+      setSelectedToneByTrack((prev) => ({ ...prev, [selectedTrackKey]: name }))
+    }
+    closeCloneDialog()
   }
 
   return (
@@ -955,24 +994,36 @@ export default function App() {
                           <span className="text-[10px] text-primary">按轨道应用</span>
                         </div>
                         <div className="grid grid-cols-2 gap-1.5">
-                          {clonedVoices.map((name) => {
-                            const isCreate = name === '点击克隆'
-                            const active = !isCreate && activeTone === name
+                          <button
+                            onClick={openCloneDialog}
+                            className="flex items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 p-2 text-left transition hover:bg-primary/10"
+                          >
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))] text-xs">
+                              +
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-[11px] font-medium">点击克隆</p>
+                              <p className="text-[10px] text-primary">录音/上传音频</p>
+                            </div>
+                          </button>
+                          {clonedVoiceItems.map((name) => {
+                            const active = activeTone === name
                             return (
                               <button
                                 key={name}
-                                onClick={() => !isCreate && setToneForCurrentTrack(name)}
-                                className={`flex items-center gap-2 rounded-md border p-2 text-left transition ${active
+                                onClick={() => setToneForCurrentTrack(name)}
+                                className={`flex items-center gap-2 rounded-md border p-2 text-left transition ${
+                                  active
                                     ? 'border-primary/40 bg-primary/10'
                                     : 'border-border bg-card hover:border-primary/30'
-                                  }`}
+                                }`}
                               >
                                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))] text-xs">
-                                  {isCreate ? '+' : '声'}
+                                  声
                                 </div>
                                 <div className="min-w-0">
                                   <p className="truncate text-[11px] font-medium">{name}</p>
-                                  <p className="text-[10px] text-primary">{isCreate ? '创建复刻' : '我的音色'}</p>
+                                  <p className="text-[10px] text-primary">我的音色</p>
                                 </div>
                               </button>
                             )
@@ -1097,6 +1148,106 @@ export default function App() {
             </section>
           </aside>
         </section>
+
+        {cloneDialogOpen && (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-3" onClick={closeCloneDialog}>
+            <div
+              className="w-full max-w-md rounded-lg border border-border bg-card p-3 shadow-xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">复刻音色</h3>
+                <button className="rounded-md border border-border px-2 py-1 text-[11px]" onClick={closeCloneDialog}>
+                  关闭
+                </button>
+              </div>
+              <div className="mb-2 flex gap-1">
+                <button
+                  onClick={() => setCloneMethod('record')}
+                  className={`rounded-md border px-2 py-1 text-[11px] ${
+                    cloneMethod === 'record'
+                      ? 'border-primary/40 bg-primary/15 text-primary'
+                      : 'border-border bg-card text-muted-foreground'
+                  }`}
+                >
+                  录音克隆
+                </button>
+                <button
+                  onClick={() => setCloneMethod('upload')}
+                  className={`rounded-md border px-2 py-1 text-[11px] ${
+                    cloneMethod === 'upload'
+                      ? 'border-primary/40 bg-primary/15 text-primary'
+                      : 'border-border bg-card text-muted-foreground'
+                  }`}
+                >
+                  上传音频克隆
+                </button>
+              </div>
+
+              <div className="space-y-2 rounded-md border border-border bg-background/70 p-2">
+                <label className="text-[11px] text-muted-foreground">新音色名称</label>
+                <input
+                  value={cloneNameInput}
+                  onChange={(event) => setCloneNameInput(event.target.value)}
+                  placeholder="例如：旁白女声-清亮"
+                  className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+                />
+
+                {cloneMethod === 'record' && (
+                  <div className="space-y-1.5">
+                    <div className="rounded-md border border-border bg-card px-2 py-1.5 text-[11px] text-muted-foreground">
+                      录音时长：{recordSeconds}s（至少 3 秒）
+                    </div>
+                    <button
+                      onClick={() => setIsRecording((prev) => !prev)}
+                      className={`rounded-md border px-2 py-1 text-[11px] ${
+                        isRecording
+                          ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                          : 'border-primary/40 bg-primary/10 text-primary'
+                      }`}
+                    >
+                      {isRecording ? '停止录音' : '开始录音'}
+                    </button>
+                  </div>
+                )}
+
+                {cloneMethod === 'upload' && (
+                  <div className="space-y-1.5">
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0]
+                        setUploadedAudioName(file ? file.name : '')
+                      }}
+                      className="w-full text-[11px]"
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      {uploadedAudioName ? `已选择：${uploadedAudioName}` : '请上传一段清晰的人声音频'}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-2 flex justify-end gap-1.5">
+                <button className="rounded-md border border-border px-2 py-1 text-[11px]" onClick={closeCloneDialog}>
+                  取消
+                </button>
+                <button
+                  onClick={submitClone}
+                  disabled={!cloneNameInput.trim() || (cloneMethod === 'record' ? recordSeconds < 3 : !uploadedAudioName)}
+                  className={`rounded-md border px-2 py-1 text-[11px] ${
+                    !cloneNameInput.trim() || (cloneMethod === 'record' ? recordSeconds < 3 : !uploadedAudioName)
+                      ? 'cursor-not-allowed border-border bg-muted/40 text-muted-foreground'
+                      : 'border-primary/30 bg-primary/10 text-primary'
+                  }`}
+                >
+                  开始克隆
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </main>
