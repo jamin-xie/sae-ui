@@ -1,6 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 type TrackRow = { name: string; blocks: string[] }
+type AssetTab = 'sfx' | 'music' | 'my_assets'
+type LibraryFilterTab = 'sfx' | 'music'
+type MyAssetCategory = 'all' | 'sfx' | 'music'
+type AnalysisStatus = 'idle' | 'running' | 'done'
+type CuratedAsset = { name: string; tags: string[]; keywords: string[] }
+type MyAsset = { name: string; type: 'sfx' | 'music'; source: '收藏' | '上传' }
 type MaterialTab = {
   id: string
   title: string
@@ -29,9 +35,9 @@ const initialMaterialTabs: MaterialTab[] = [
     id: 'mat-2',
     title: 'interview-room.mov',
     zoom: '66.7%',
-      split: false,
-      tracks: [{ name: '视频', blocks: ['interview-room.mov'] }],
-    },
+    split: false,
+    tracks: [{ name: '视频', blocks: ['interview-room.mov'] }],
+  },
 ]
 
 const getTrackMeta = (name: string) => {
@@ -39,6 +45,80 @@ const getTrackMeta = (name: string) => {
   if (name.startsWith('人声')) return { short: 'VOC', type: 'voice' as const, color: 'from-sky-400/70 to-blue-600/80' }
   if (name.startsWith('音效')) return { short: 'SFX', type: 'sfx' as const, color: 'from-fuchsia-400/70 to-violet-600/80' }
   return { short: 'BGM', type: 'bgm' as const, color: 'from-emerald-400/70 to-green-600/80' }
+}
+
+const getTrackTuning = (trackName: string) => {
+  const meta = getTrackMeta(trackName)
+  if (meta.type === 'video') {
+    return {
+      channel: '视频轨通道',
+      profile: '画面同步模式',
+      tabs: ['Compressor', 'Noise Gate', 'Reverb'],
+      controls: [
+        { label: '同步偏移(ms)', value: '24%', amount: '+12ms' },
+        { label: '瞬态保护', value: '52%', amount: '中' },
+        { label: '高频抑制', value: '33%', amount: '-3dB' },
+        { label: '低频清理', value: '47%', amount: '-6dB' },
+      ],
+      meter: '视频伴音稳定度',
+      meterValue: '71%',
+      rangeLeft: '-18dB',
+      rangeCenter: '-6dB',
+      rangeRight: '0dB',
+    }
+  }
+  if (meta.type === 'voice') {
+    return {
+      channel: '人声轨通道',
+      profile: 'AI 主人声',
+      tabs: ['Compressor', 'Noise Gate', 'Reverb'],
+      controls: [
+        { label: '低切(Hz)', value: '38%', amount: '82Hz' },
+        { label: '齿音抑制(kHz)', value: '56%', amount: '5.2kHz' },
+        { label: '中频聚焦(kHz)', value: '44%', amount: '1.8kHz' },
+        { label: '混响发送', value: '26%', amount: '12%' },
+      ],
+      meter: 'LUFs 实时监测',
+      meterValue: '64%',
+      rangeLeft: '-16dB',
+      rangeCenter: '-8dB',
+      rangeRight: '0dB',
+    }
+  }
+  if (meta.type === 'sfx') {
+    return {
+      channel: '音效轨通道',
+      profile: '冲击增强',
+      tabs: ['Compressor', 'Transient', 'Limiter'],
+      controls: [
+        { label: '瞬态增强', value: '61%', amount: '+6dB' },
+        { label: '压缩阈值', value: '41%', amount: '-9dB' },
+        { label: '立体声宽度', value: '58%', amount: '120%' },
+        { label: '尾音衰减', value: '36%', amount: '220ms' },
+      ],
+      meter: '峰值保护',
+      meterValue: '52%',
+      rangeLeft: '-12dB',
+      rangeCenter: '-5dB',
+      rangeRight: '0dB',
+    }
+  }
+  return {
+    channel: '背景音轨通道',
+    profile: '氛围铺底',
+    tabs: ['Compressor', 'Ducking', 'Reverb'],
+    controls: [
+      { label: '人声闪避', value: '46%', amount: '-5dB' },
+      { label: '低频滚降', value: '29%', amount: '95Hz' },
+      { label: '立体声扩展', value: '64%', amount: '132%' },
+      { label: '空间感', value: '48%', amount: '中' },
+    ],
+    meter: '背景音占比',
+    meterValue: '58%',
+    rangeLeft: '-20dB',
+    rangeCenter: '-10dB',
+    rangeRight: '0dB',
+  }
 }
 
 const aiLogs = [
@@ -49,18 +129,146 @@ const aiLogs = [
   'v5：生成对比版本，可一键回退到 v2 / v3 / v4。',
 ]
 
+const analysisFlowSteps = [
+  '检测语种、音色、情绪标签',
+  '切句并识别说话人',
+  '生成情绪迁移建议',
+  '评估替换风险与冲突',
+  '输出可执行调优参数',
+]
+
+const analysisResultCards = [
+  { label: '识别语种', value: '中文(普通话)' },
+  { label: '说话人', value: '2 人（女声 1 / 男声 1）' },
+  { label: '情绪分布', value: '高兴 41% / 冷静 37% / 悲伤 22%' },
+  { label: '推荐音色', value: '女生 / 京腔（角色化）' },
+]
+
+const analysisRisks = ['口型偏差：中', '爆破音冲突：低', '背景噪声叠加：中低']
+
 const clonedVoices = ['点击克隆', '音色01', '音色02']
-const curatedVoices = ['机器人2', '怪物2', '怪物', '女生', '男生', '京腔']
+const curatedVoices: CuratedAsset[] = [
+  { name: '机器人2', tags: ['AI声线', '科技', '中性'], keywords: ['机器人', '电子', '解说'] },
+  { name: '怪物2', tags: ['角色', '低沉', '电影感'], keywords: ['怪物', '反派', '预告片'] },
+  { name: '怪物', tags: ['角色', '暗黑', '冲击'], keywords: ['厚重', '怒吼', '氛围'] },
+  { name: '女生', tags: ['人声', '清亮', '广告'], keywords: ['女声', '口播', '温柔'] },
+  { name: '男生', tags: ['人声', '稳重', '旁白'], keywords: ['男声', '纪录片', '配音'] },
+  { name: '京腔', tags: ['方言', '特色', '剧情'], keywords: ['北京话', '角色音', '方言配音'] },
+]
 const mySfx = ['片头鼓点', '呼啸转场', '按钮点击']
-const curatedSfx = ['赛博冲击', '自然雨声', '电影低频', 'UI 反馈包', '机械臂', '能量脉冲']
-const myBgm = ['晨间钢琴', '轻电子循环', '城市Lo-fi']
-const curatedBgm = ['电影史诗', '温暖民谣', '悬疑脉冲', '国潮打击', 'Future Bass', '氛围环境']
+const curatedSfx: CuratedAsset[] = [
+  { name: '赛博冲击', tags: ['赛博', '冲击', '转场'], keywords: ['科技感', '重击', '动作'] },
+  { name: '自然雨声', tags: ['自然', '环境', '氛围'], keywords: ['雨滴', '白噪声', '背景'] },
+  { name: '电影低频', tags: ['电影', '低频', '悬疑'], keywords: ['boom', '紧张', '预告片'] },
+  { name: 'UI 反馈包', tags: ['UI', '交互', '轻量'], keywords: ['点击', '提示', '界面'] },
+  { name: '机械臂', tags: ['机械', '金属', '工业'], keywords: ['机器人', '关节', '运镜'] },
+  { name: '能量脉冲', tags: ['科幻', '能量', '节奏'], keywords: ['脉冲', '电流', '未来感'] },
+]
+const myMusic = ['晨间钢琴', '轻电子循环', '城市Lo-fi']
+const curatedMusic: CuratedAsset[] = [
+  { name: '电影史诗', tags: ['史诗', '管弦', '大场面'], keywords: ['预告片', '宏大', '情绪推进'] },
+  { name: '温暖民谣', tags: ['民谣', '温暖', '生活'], keywords: ['木吉他', 'Vlog', '轻松'] },
+  { name: '悬疑脉冲', tags: ['悬疑', '节奏', '紧张'], keywords: ['脉冲', '推理', '压迫感'] },
+  { name: '国潮打击', tags: ['国风', '打击', '节庆'], keywords: ['鼓点', '中国风', '品牌片'] },
+  { name: 'Future Bass', tags: ['电子', '动感', '青年'], keywords: ['drop', '活力', '科技发布'] },
+  { name: '氛围环境', tags: ['Ambient', '铺底', '空间'], keywords: ['氛围', '空灵', '背景层'] },
+]
+const myAssets: MyAsset[] = [
+  { name: '品牌宣传BGM-v2', type: 'music', source: '上传' },
+  { name: '转场点击包-A', type: 'sfx', source: '上传' },
+]
+
+const getCuratedTags = (assets: CuratedAsset[]) => Array.from(new Set(assets.flatMap((asset) => asset.tags)))
+
+const filterCuratedAssets = (assets: CuratedAsset[], query: string, selectedTags: string[]) => {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+  return assets.filter((asset) => {
+    const searchText = `${asset.name} ${asset.tags.join(' ')} ${asset.keywords.join(' ')}`.toLowerCase()
+    const keywordMatched = terms.length === 0 || terms.every((term) => searchText.includes(term))
+    const tagsMatched = selectedTags.length === 0 || selectedTags.every((tag) => asset.tags.includes(tag))
+    return keywordMatched && tagsMatched
+  })
+}
 
 export default function App() {
-  const [assetTab, setAssetTab] = useState<'voice' | 'sfx' | 'bgm'>('voice')
+  const [assetTab, setAssetTab] = useState<AssetTab>('sfx')
+  const [myAssetCategory, setMyAssetCategory] = useState<MyAssetCategory>('all')
+  const [uploadCategory, setUploadCategory] = useState<MyAssetCategory>('all')
+  const [uploadPanelOpen, setUploadPanelOpen] = useState(true)
   const [materialTabs, setMaterialTabs] = useState<MaterialTab[]>(initialMaterialTabs)
   const [activeMaterialId, setActiveMaterialId] = useState(initialMaterialTabs[0].id)
+  const [selectedTrackKey, setSelectedTrackKey] = useState(
+    `${initialMaterialTabs[0].id}::${initialMaterialTabs[0].tracks[0].name}`,
+  )
+  const [curatedQuery, setCuratedQuery] = useState<Record<LibraryFilterTab, string>>({ sfx: '', music: '' })
+  const [selectedCuratedTags, setSelectedCuratedTags] = useState<Record<LibraryFilterTab, string[]>>({
+    sfx: [],
+    music: [],
+  })
+  const [toneQuery, setToneQuery] = useState('')
+  const [selectedToneTags, setSelectedToneTags] = useState<string[]>([])
+  const [tuningTab, setTuningTab] = useState<'basic' | 'tone' | 'speed'>('basic')
+  const [selectedToneByTrack, setSelectedToneByTrack] = useState<Record<string, string>>({})
+  const [speechRateByTrack, setSpeechRateByTrack] = useState<Record<string, number>>({})
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('idle')
+  const [analysisProgress, setAnalysisProgress] = useState(0)
+  const [analysisStepIndex, setAnalysisStepIndex] = useState(0)
+  const [analysisFinishedAt, setAnalysisFinishedAt] = useState('')
   const activeMaterial = materialTabs.find((tab) => tab.id === activeMaterialId)
+  const selectedTrackName = selectedTrackKey.split('::')[1]
+  const selectedTrack = activeMaterial?.tracks.find((track) => track.name === selectedTrackName) ?? activeMaterial?.tracks[0]
+  const selectedTuning = selectedTrack ? getTrackTuning(selectedTrack.name) : null
+  const toneOptions = Array.from(
+    new Set([...clonedVoices.filter((name) => name !== '点击克隆'), ...curatedVoices.map((asset) => asset.name)]),
+  )
+  const activeTone = selectedTrackKey ? selectedToneByTrack[selectedTrackKey] ?? toneOptions[0] : toneOptions[0]
+  const activeSpeechRate = selectedTrackKey ? speechRateByTrack[selectedTrackKey] ?? 1 : 1
+  const filteredCuratedVoices = filterCuratedAssets(curatedVoices, toneQuery, selectedToneTags)
+  const filteredCuratedSfx = filterCuratedAssets(curatedSfx, curatedQuery.sfx, selectedCuratedTags.sfx)
+  const filteredCuratedMusic = filterCuratedAssets(curatedMusic, curatedQuery.music, selectedCuratedTags.music)
+  const myCollectionAssets: MyAsset[] = [
+    ...mySfx.map((name) => ({ name, type: 'sfx' as const, source: '收藏' as const })),
+    ...myMusic.map((name) => ({ name, type: 'music' as const, source: '收藏' as const })),
+    ...myAssets,
+  ]
+  const filteredMyAssets = myCollectionAssets.filter((asset) => myAssetCategory === 'all' || asset.type === myAssetCategory)
+  const filteredUploadedAssets = myAssets.filter((asset) => uploadCategory === 'all' || asset.type === uploadCategory)
+  const curatedVoiceTags = getCuratedTags(curatedVoices)
+  const curatedSfxTags = getCuratedTags(curatedSfx)
+  const curatedMusicTags = getCuratedTags(curatedMusic)
+
+  useEffect(() => {
+    if (!activeMaterial || activeMaterial.tracks.length === 0) return
+    const currentTrackName = selectedTrackKey.split('::')[1]
+    const exists = activeMaterial.tracks.some((track) => track.name === currentTrackName)
+    if (!exists || !selectedTrackKey.startsWith(`${activeMaterial.id}::`)) {
+      setSelectedTrackKey(`${activeMaterial.id}::${activeMaterial.tracks[0].name}`)
+    }
+  }, [activeMaterial, selectedTrackKey])
+
+  useEffect(() => {
+    if (analysisStatus !== 'running') return
+    const stepTimer = setInterval(() => {
+      setAnalysisStepIndex((prev) => (prev >= analysisFlowSteps.length - 1 ? prev : prev + 1))
+    }, 1000)
+    const progressTimer = setInterval(() => {
+      setAnalysisProgress((prev) => (prev >= 95 ? prev : prev + 3))
+    }, 180)
+    const completeTimer = setTimeout(() => {
+      setAnalysisProgress(100)
+      setAnalysisStepIndex(analysisFlowSteps.length - 1)
+      setAnalysisFinishedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+      setAnalysisStatus('done')
+    }, 5200)
+    return () => {
+      clearInterval(stepTimer)
+      clearInterval(progressTimer)
+      clearTimeout(completeTimer)
+    }
+  }, [analysisStatus])
 
   const addMaterialTab = () => {
     const newId = `mat-${Date.now()}`
@@ -86,12 +294,53 @@ export default function App() {
     })
   }
 
+  const toggleCuratedTag = (tab: LibraryFilterTab, tag: string) => {
+    setSelectedCuratedTags((prev) => {
+      const exists = prev[tab].includes(tag)
+      return {
+        ...prev,
+        [tab]: exists ? prev[tab].filter((item) => item !== tag) : [...prev[tab], tag],
+      }
+    })
+  }
+
+  const clearCuratedFilter = (tab: LibraryFilterTab) => {
+    setCuratedQuery((prev) => ({ ...prev, [tab]: '' }))
+    setSelectedCuratedTags((prev) => ({ ...prev, [tab]: [] }))
+  }
+
+  const toggleToneTag = (tag: string) => {
+    setSelectedToneTags((prev) => (prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag]))
+  }
+
+  const clearToneFilter = () => {
+    setToneQuery('')
+    setSelectedToneTags([])
+  }
+
+  const setToneForCurrentTrack = (tone: string) => {
+    if (!selectedTrackKey) return
+    setSelectedToneByTrack((prev) => ({ ...prev, [selectedTrackKey]: tone }))
+  }
+
+  const setSpeechRateForCurrentTrack = (rate: number) => {
+    if (!selectedTrackKey) return
+    setSpeechRateByTrack((prev) => ({ ...prev, [selectedTrackKey]: rate }))
+  }
+
+  const startAnalysis = () => {
+    setAnalysisStatus('running')
+    setAnalysisProgress(2)
+    setAnalysisStepIndex(0)
+    setAnalysisFinishedAt('')
+  }
+
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_color-mix(in_oklch,var(--primary)_16%,transparent),transparent_42%)] p-3 text-foreground md:p-4">
-      <div className="mx-auto max-w-[1600px] space-y-3">
-        <header className="rounded-xl border border-border/80 bg-card/90 px-4 py-3 shadow-sm backdrop-blur">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h1 className="text-base font-semibold">项目控制栏</h1>
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_color-mix(in_oklch,var(--primary)_16%,transparent),transparent_42%)] p-2 text-foreground md:p-3">
+      <div className="mx-auto max-w-[1700px] overflow-hidden rounded-lg border border-border/70 bg-background/95">
+        <header className="border-b border-border/70 px-3 py-2 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h1 className="text-base font-semibold">S.A.E音频编辑</h1>
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span className="rounded-md border border-border px-2 py-1">菜单</span>
               <span className="rounded-md border border-border px-2 py-1">设置</span>
@@ -104,28 +353,27 @@ export default function App() {
           </div>
         </header>
 
-        <section className="grid gap-3 xl:grid-cols-[320px_minmax(0,1fr)_340px]">
-          <aside className="space-y-3">
-            <section className="rounded-xl border border-border/80 bg-card/95 p-3 shadow-sm">
-              <div className="mb-3 flex items-center justify-between">
+        <section className="grid gap-0 xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+          <aside className="space-y-0 p-2 xl:border-r xl:border-border/70">
+            <section className="pb-2">
+              <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">资产管理</h2>
               </div>
-              <div className="mb-3 grid grid-cols-3 gap-2 text-xs">
+              <div className="mb-2 grid grid-cols-3 gap-1.5 text-xs">
                 {[
-                  ['voice', '声音资产'],
                   ['sfx', '音效资产'],
-                  ['bgm', '背景音资产'],
+                  ['music', '音乐资产'],
+                  ['my_assets', '我的资产'],
                 ].map(([key, label]) => {
                   const active = assetTab === key
                   return (
                     <button
                       key={key}
-                      onClick={() => setAssetTab(key as 'voice' | 'sfx' | 'bgm')}
-                      className={`rounded-md border px-2 py-1.5 transition ${
-                        active
+                      onClick={() => setAssetTab(key as AssetTab)}
+                      className={`rounded-md border px-2 py-1.5 transition ${active
                           ? 'border-primary/40 bg-primary/15 text-primary'
                           : 'border-border bg-background text-muted-foreground hover:bg-accent/60'
-                      }`}
+                        }`}
                     >
                       {label}
                     </button>
@@ -133,135 +381,259 @@ export default function App() {
                 })}
               </div>
 
-              {assetTab === 'voice' && (
-                <div className="space-y-3 text-xs">
-                  <div>
-                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground">复刻音色</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {clonedVoices.map((name) => (
-                        <article
-                          key={name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 transition hover:border-primary/40"
-                        >
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))] text-base text-secondary-foreground">
-                            {name === '点击克隆' ? '+' : '声'}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">{name}</p>
-                            <p className="text-[10px] text-primary">
-                              {name === '点击克隆' ? '创建复刻' : '我的音色'}
-                            </p>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </div>
+              {assetTab === 'my_assets' && (
+                <div className="space-y-2 text-xs">
 
-                  <div>
-                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground">优质音库</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {curatedVoices.map((name) => (
-                        <article
-                          key={name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 transition hover:border-primary/40"
+                  <div className="border-t border-border/70 pt-2">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-muted-foreground">我的上传</h3>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">{filteredUploadedAssets.length} 条</span>
+                        <button
+                          onClick={() => setUploadPanelOpen((prev) => !prev)}
+                          className="rounded-md border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
                         >
-                          <div className="h-10 w-10 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">{name}</p>
-                            <p className="text-[10px] text-primary">智作优选</p>
-                          </div>
-                        </article>
-                      ))}
+                          {uploadPanelOpen ? '收起' : '展开'}
+                        </button>
+                      </div>
                     </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-left text-[11px] text-primary">
+                        上传音效
+                      </button>
+                      <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-left text-[11px] text-primary">
+                        上传音乐
+                      </button>
+                    </div>
+                    {uploadPanelOpen && (
+                      <div className="mt-1.5 space-y-1.5">
+                        <div className="flex gap-1">
+                          {[
+                            ['all', '全部'],
+                            ['sfx', '音效'],
+                            ['music', '音乐'],
+                          ].map(([key, label]) => {
+                            const active = uploadCategory === key
+                            return (
+                              <button
+                                key={key}
+                                onClick={() => setUploadCategory(key as MyAssetCategory)}
+                                className={`rounded-md border px-2 py-1 text-[11px] ${active
+                                    ? 'border-primary/40 bg-primary/15 text-primary'
+                                    : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                                  }`}
+                              >
+                                {label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <div className="space-y-1">
+                          {filteredUploadedAssets.map((asset) => (
+                            <article
+                              key={`upload-${asset.type}-${asset.name}`}
+                              className="flex items-center justify-between rounded-md border border-border bg-background/60 px-2 py-1.5"
+                            >
+                              <p className="truncate pr-2 text-[11px] font-medium">{asset.name}</p>
+                              <span className="shrink-0 text-[10px] text-primary">
+                                {asset.type === 'sfx' ? '音效上传' : '音乐上传'}
+                              </span>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold text-muted-foreground">我的收藏</h3>
+                    <span className="text-[10px] text-muted-foreground">{filteredMyAssets.length} 条</span>
+                  </div>
+                  <div className="flex gap-1">
+                    {[
+                      ['all', '全部'],
+                      ['sfx', '音效'],
+                      ['music', '音乐'],
+                    ].map(([key, label]) => {
+                      const active = myAssetCategory === key
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => setMyAssetCategory(key as MyAssetCategory)}
+                          className={`rounded-md border px-2 py-1 text-[11px] ${active
+                              ? 'border-primary/40 bg-primary/15 text-primary'
+                              : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {filteredMyAssets.map((asset) => (
+                      <article
+                        key={`${asset.type}-${asset.name}`}
+                        className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2"
+                      >
+                        <div className="h-8 w-8 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
+                        <div className="min-w-0">
+                          <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                          <p className="text-[10px] text-primary">{asset.type === 'sfx' ? '音效' : '音乐'} · {asset.source}</p>
+                        </div>
+                      </article>
+                    ))}
                   </div>
                 </div>
               )}
 
               {assetTab === 'sfx' && (
-                <div className="space-y-3 text-xs">
+                <div className="space-y-2 text-xs">
                   <div>
-                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground">我的音效</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {mySfx.map((name) => (
-                        <article
-                          key={name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 transition hover:border-primary/40"
-                        >
-                          <div className="h-10 w-10 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">{name}</p>
-                            <p className="text-[10px] text-primary">我的音效</p>
-                          </div>
-                        </article>
-                      ))}
+                    <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">优质音效库</h3>
+                    <div className="mb-1.5 rounded-md border border-border bg-background/70 p-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          value={curatedQuery.sfx}
+                          onChange={(event) => setCuratedQuery((prev) => ({ ...prev, sfx: event.target.value }))}
+                          placeholder="AI关键词搜索：赛博 冲击 转场"
+                          className="h-7 w-full rounded-md border border-border bg-card px-2 text-[11px] text-foreground outline-none focus:border-primary/40"
+                        />
+                        {(curatedQuery.sfx || selectedCuratedTags.sfx.length > 0) && (
+                          <button
+                            onClick={() => clearCuratedFilter('sfx')}
+                            className="h-7 shrink-0 rounded-md border border-border px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                          >
+                            清除
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {curatedSfxTags.map((tag) => {
+                          const active = selectedCuratedTags.sfx.includes(tag)
+                          return (
+                            <button
+                              key={tag}
+                              onClick={() => toggleCuratedTag('sfx', tag)}
+                              className={`rounded-md border px-1.5 py-0.5 text-[10px] ${active
+                                  ? 'border-primary/40 bg-primary/15 text-primary'
+                                  : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                                }`}
+                            >
+                              {tag}
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
-                  </div>
-
-                  <div>
-                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground">优质音效库</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {curatedSfx.map((name) => (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {filteredCuratedSfx.map((asset) => (
                         <article
-                          key={name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 transition hover:border-primary/40"
+                          key={asset.name}
+                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2 transition hover:border-primary/40"
                         >
                           <div className="h-10 w-10 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
                           <div className="min-w-0">
-                            <p className="truncate font-medium">{name}</p>
+                            <p className="truncate font-medium">{asset.name}</p>
                             <p className="text-[10px] text-primary">智作优选</p>
                           </div>
                         </article>
                       ))}
+                      {filteredCuratedSfx.length === 0 && (
+                        <p className="col-span-2 rounded-md border border-dashed border-border bg-background/70 p-2 text-[11px] text-muted-foreground">
+                          未命中音效结果，尝试更换关键词或减少标签。
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
 
-              {assetTab === 'bgm' && (
-                <div className="space-y-3 text-xs">
+              {assetTab === 'music' && (
+                <div className="space-y-2 text-xs">
                   <div>
-                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground">我的背景音</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {myBgm.map((name) => (
-                        <article
-                          key={name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 transition hover:border-primary/40"
-                        >
-                          <div className="h-10 w-10 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">{name}</p>
-                            <p className="text-[10px] text-primary">我的背景音</p>
-                          </div>
-                        </article>
-                      ))}
+                    <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">优质音乐库</h3>
+                    <div className="mb-1.5 rounded-md border border-border bg-background/70 p-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          value={curatedQuery.music}
+                          onChange={(event) => setCuratedQuery((prev) => ({ ...prev, music: event.target.value }))}
+                          placeholder="AI关键词搜索：悬疑 节奏 电影"
+                          className="h-7 w-full rounded-md border border-border bg-card px-2 text-[11px] text-foreground outline-none focus:border-primary/40"
+                        />
+                        {(curatedQuery.music || selectedCuratedTags.music.length > 0) && (
+                          <button
+                            onClick={() => clearCuratedFilter('music')}
+                            className="h-7 shrink-0 rounded-md border border-border px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                          >
+                            清除
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {curatedMusicTags.map((tag) => {
+                          const active = selectedCuratedTags.music.includes(tag)
+                          return (
+                            <button
+                              key={tag}
+                              onClick={() => toggleCuratedTag('music', tag)}
+                              className={`rounded-md border px-1.5 py-0.5 text-[10px] ${active
+                                  ? 'border-primary/40 bg-primary/15 text-primary'
+                                  : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                                }`}
+                            >
+                              {tag}
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
-                  </div>
-
-                  <div>
-                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground">优质背景音库</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {curatedBgm.map((name) => (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {filteredCuratedMusic.map((asset) => (
                         <article
-                          key={name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 transition hover:border-primary/40"
+                          key={asset.name}
+                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2 transition hover:border-primary/40"
                         >
                           <div className="h-10 w-10 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
                           <div className="min-w-0">
-                            <p className="truncate font-medium">{name}</p>
+                            <p className="truncate font-medium">{asset.name}</p>
                             <p className="text-[10px] text-primary">智作优选</p>
                           </div>
                         </article>
                       ))}
+                      {filteredCuratedMusic.length === 0 && (
+                        <p className="col-span-2 rounded-md border border-dashed border-border bg-background/70 p-2 text-[11px] text-muted-foreground">
+                          未命中音乐结果，尝试更换关键词或减少标签。
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
             </section>
+
+            <section className="border-t border-border/70 pt-2">
+              <div className="mb-1.5 flex items-center justify-between">
+                <h2 className="text-sm font-semibold">AI 操作日志</h2>
+                <div className="flex gap-1.5 text-[11px]">
+                  <button className="rounded-md border border-border px-2 py-1">试听</button>
+                  <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
+                    应用当前版本
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                {aiLogs.map((log) => (
+                  <article key={log} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-[11px]">
+                    {log}
+                  </article>
+                ))}
+              </div>
+            </section>
           </aside>
 
-          <section className="space-y-3">
-            <div className="rounded-xl border border-border/80 bg-card/95 p-3 shadow-sm">
-              <div className="mb-2 flex items-center justify-between">
+          <section className="space-y-0 p-2 xl:border-r xl:border-border/70">
+            <div className="border-b border-border/70 pb-2">
+              <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">预览区</h2>
                 <div className="flex gap-2 text-xs">
                   <button className="rounded-md border border-border bg-background px-2 py-1">拆轨</button>
@@ -270,7 +642,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <div className="grid min-h-[260px] place-items-center rounded-lg border border-dashed border-border bg-[linear-gradient(120deg,color-mix(in_oklch,var(--muted)_70%,transparent),transparent)] text-center">
+              <div className="grid min-h-[240px] place-items-center rounded-lg border border-dashed border-border bg-[linear-gradient(120deg,color-mix(in_oklch,var(--muted)_70%,transparent),transparent)] text-center">
                 <div>
                   <p className="text-sm font-medium">视频预览展示区</p>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -280,14 +652,14 @@ export default function App() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-border/80 bg-card/95 p-3 shadow-sm">
-              <div className="mb-2 flex items-center justify-between">
+            <div className="pt-2">
+              <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">专业级多轨界面</h2>
                 <div className="flex gap-2 text-xs">
                   <button className="rounded-md border border-border px-2 py-1">对比</button>
                 </div>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <div className="flex items-center gap-1 overflow-x-auto">
                   {materialTabs.map((tab) => {
                     const active = tab.id === activeMaterialId
@@ -295,11 +667,10 @@ export default function App() {
                       <button
                         key={tab.id}
                         onClick={() => setActiveMaterialId(tab.id)}
-                        className={`flex shrink-0 items-center gap-2 rounded-md border px-2 py-1 text-xs ${
-                          active
+                        className={`flex shrink-0 items-center gap-2 rounded-md border px-2 py-1 text-xs ${active
                             ? 'border-primary/40 bg-primary/15 text-primary'
                             : 'border-border bg-card text-muted-foreground'
-                        }`}
+                          }`}
                       >
                         <span className="max-w-[150px] truncate">{tab.title}</span>
                         <span>{tab.zoom}</span>
@@ -345,12 +716,18 @@ export default function App() {
                       {activeMaterial.tracks.map((row) => {
                         const meta = getTrackMeta(row.name)
                         const isAudio = meta.type !== 'video'
+                        const selected = selectedTrack?.name === row.name
                         return (
                           <div
                             key={`${activeMaterial.id}-${row.name}`}
-                            className="grid grid-cols-[160px_minmax(0,1fr)] border-b border-border/70 last:border-b-0"
+                            onClick={() => setSelectedTrackKey(`${activeMaterial.id}::${row.name}`)}
+                            className={`grid cursor-pointer grid-cols-[160px_minmax(0,1fr)] border-b border-border/70 transition last:border-b-0 ${selected ? 'bg-primary/5' : ''
+                              }`}
                           >
-                            <div className="flex items-center gap-2 bg-muted/30 px-2 py-2 text-xs text-foreground">
+                            <div
+                              className={`flex items-center gap-2 px-2 py-2 text-xs text-foreground ${selected ? 'bg-primary/10' : 'bg-muted/30'
+                                }`}
+                            >
                               <div
                                 className={`flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br ${meta.color} text-[10px] font-semibold text-white`}
                               >
@@ -361,17 +738,16 @@ export default function App() {
                                 <p className="text-[10px] text-muted-foreground">{isAudio ? '音频轨道' : '视频轨道'}</p>
                               </div>
                             </div>
-                            <div className="relative overflow-hidden bg-background p-2">
+                            <div className="relative overflow-hidden bg-background p-1.5">
                               <div className="absolute inset-0 bg-[repeating-linear-gradient(to_right,transparent_0,transparent_95px,rgba(0,0,0,0.05)_96px)]" />
                               <div className="relative flex min-h-12 items-center gap-2">
                                 {row.blocks.map((block, blockIndex) => (
                                   <span
                                     key={block}
-                                    className={`group relative overflow-hidden rounded-md border px-2 py-1 text-[11px] ${
-                                      isAudio
+                                    className={`group relative overflow-hidden rounded-md border px-2 py-1 text-[11px] ${isAudio
                                         ? 'border-sky-300/80 bg-sky-100 text-sky-900'
                                         : 'border-cyan-300/80 bg-cyan-100 text-cyan-900'
-                                    }`}
+                                      }`}
                                     style={{ width: `${blockIndex === 0 ? 38 : 22}%` }}
                                   >
                                     <span className="relative z-10 truncate">{block}</span>
@@ -392,67 +768,336 @@ export default function App() {
             </div>
           </section>
 
-          <aside className="space-y-3">
-            <section className="rounded-xl border border-border/80 bg-card/95 p-3 shadow-sm">
-              <div className="mb-2 flex items-center justify-between">
+          <aside className="space-y-0 p-2">
+            <section className="pb-2">
+              <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">AI 智能分析面板</h2>
-                <button className="rounded-md border border-border px-2 py-1 text-xs">开始分析</button>
+                <button
+                  onClick={startAnalysis}
+                  disabled={analysisStatus === 'running'}
+                  className={`rounded-md border px-2 py-1 text-xs ${
+                    analysisStatus === 'running'
+                      ? 'cursor-not-allowed border-border bg-muted/40 text-muted-foreground'
+                      : 'border-border bg-card hover:bg-accent/50'
+                  }`}
+                >
+                  {analysisStatus === 'running' ? '分析中...' : analysisStatus === 'done' ? '重新分析' : '开始分析'}
+                </button>
               </div>
-              <ol className="space-y-2 text-xs text-muted-foreground">
-                <li>1. 自动检测音频片段，输出语种、音色、情绪等初始标签。</li>
-                <li>2. 按语义切句并识别说话人，支持从视频分轨中抽取可训练音频。</li>
-                <li>3. 结合目标情绪生成迁移建议，并推荐最佳 Prompt 与参数。</li>
-                <li>4. 输出替换风险提示（口型偏差、爆破音、背景噪声冲突）。</li>
-                <li>5. 一键提交到右侧精细调优，或写入资产库形成可复用模板。</li>
-              </ol>
-            </section>
-
-            <section className="rounded-xl border border-border/80 bg-card/95 p-3 shadow-sm">
-              <h2 className="mb-2 text-sm font-semibold">精细调优面板</h2>
-              <div className="space-y-2 text-xs">
-                {[
-                  ['情绪强度', '72%'],
-                  ['语速', '1.08x'],
-                  ['清晰度', '68%'],
-                  ['呼吸感', '35%'],
-                  ['拟真度', '84%'],
-                ].map(([k, v]) => (
-                  <div key={k} className="rounded-md border border-border bg-background/70 p-2">
-                    <div className="mb-1 flex items-center justify-between">
-                      <span>{k}</span>
-                      <span className="text-primary">{v}</span>
+              {analysisStatus === 'idle' && (
+                <ol className="space-y-1.5 text-xs text-muted-foreground">
+                  <li>1. 自动检测音频片段，输出语种、音色、情绪等初始标签。</li>
+                  <li>2. 按语义切句并识别说话人，支持从视频分轨中抽取可训练音频。</li>
+                  <li>3. 结合目标情绪生成迁移建议，并推荐最佳 Prompt 与参数。</li>
+                  <li>4. 输出替换风险提示（口型偏差、爆破音、背景噪声冲突）。</li>
+                  <li>5. 一键提交到右侧精细调优，或写入资产库形成可复用模板。</li>
+                </ol>
+              )}
+              {analysisStatus === 'running' && (
+                <div className="space-y-2">
+                  <div className="rounded-md border border-border bg-background/70 p-2">
+                    <div className="mb-1.5 flex items-center justify-between text-[11px]">
+                      <span>分析进度</span>
+                      <span className="text-primary">{analysisProgress}%</span>
                     </div>
                     <div className="h-1.5 rounded bg-muted">
-                      <div className="h-full rounded bg-primary" style={{ width: v }} />
+                      <div
+                        className="h-full rounded bg-primary transition-[width] duration-300"
+                        style={{ width: `${analysisProgress}%` }}
+                      />
                     </div>
                   </div>
-                ))}
-                <p className="rounded-md bg-primary/10 p-2 text-primary">
-                  LUFs 控制、EQ 微调、气息修复等高级能力可在此继续下钻。
+                  <div className="space-y-1">
+                    {analysisFlowSteps.map((step, index) => {
+                      const completed = index < analysisStepIndex
+                      const current = index === analysisStepIndex
+                      return (
+                        <div
+                          key={step}
+                          className={`rounded-md border px-2 py-1.5 text-[11px] ${
+                            completed
+                              ? 'border-primary/30 bg-primary/10 text-primary'
+                              : current
+                                ? 'border-border bg-card text-foreground'
+                                : 'border-border bg-background/60 text-muted-foreground'
+                          }`}
+                        >
+                          {index + 1}. {step}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              {analysisStatus === 'done' && (
+                <div className="space-y-2">
+                  <div className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-[11px] text-primary">
+                    分析完成（{analysisFinishedAt}） 已生成可执行参数与风险报告。
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {analysisResultCards.map((item) => (
+                      <article key={item.label} className="rounded-md border border-border bg-background/70 p-2">
+                        <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                        <p className="mt-0.5 text-[11px] font-medium">{item.value}</p>
+                      </article>
+                    ))}
+                  </div>
+                  <div className="rounded-md border border-border bg-background/70 p-2">
+                    <p className="mb-1 text-[10px] text-muted-foreground">替换风险评估</p>
+                    <div className="flex flex-wrap gap-1">
+                      {analysisRisks.map((risk) => (
+                        <span key={risk} className="rounded-md border border-border bg-card px-1.5 py-0.5 text-[10px]">
+                          {risk}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 text-[11px]">
+                    <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
+                      写入调优参数
+                    </button>
+                    <button className="rounded-md border border-border px-2 py-1">保存分析报告</button>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="border-t border-border/70 pt-2">
+              <h2 className="mb-1.5 text-sm font-semibold">音频设置</h2>
+              {selectedTrack && selectedTuning ? (
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex gap-1">
+                    {[
+                      ['basic', '基础'],
+                      ['tone', '音色'],
+                      ['speed', '语速'],
+                    ].map(([key, label]) => {
+                      const active = tuningTab === key
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => setTuningTab(key as 'basic' | 'tone' | 'speed')}
+                          className={`rounded-md border px-2 py-1 text-[11px] ${active
+                              ? 'border-primary/40 bg-primary/15 text-primary'
+                              : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <div className="rounded-lg border border-border bg-background/70 p-2">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div>
+                        <p className="font-semibold">{selectedTuning.channel}</p>
+                        <p className="text-[10px] text-muted-foreground">当前选中：{selectedTrack.name}</p>
+                      </div>
+                      <span className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                        {selectedTuning.profile}
+                      </span>
+                    </div>
+                    <div className="flex gap-1">
+                      {selectedTuning.tabs.map((tab, index) => (
+                        <span
+                          key={tab}
+                          className={`rounded-md border px-1.5 py-1 text-[10px] ${index === 0
+                              ? 'border-primary/40 bg-primary/15 text-primary'
+                              : 'border-border bg-card text-muted-foreground'
+                            }`}
+                        >
+                          {tab}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {tuningTab === 'basic' && (
+                    <>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {selectedTuning.controls.map((control) => (
+                          <div key={control.label} className="rounded-md border border-border bg-background/70 p-2">
+                            <div className="mb-1 flex items-center justify-between">
+                              <span className="text-[11px]">{control.label}</span>
+                              <span className="text-[10px] text-primary">{control.amount}</span>
+                            </div>
+                            <div className="h-1.5 rounded bg-muted">
+                              <div className="h-full rounded bg-primary" style={{ width: control.value }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="rounded-md border border-border bg-background/70 p-2">
+                        <div className="mb-1 flex items-center justify-between text-[11px]">
+                          <span>{selectedTuning.meter}</span>
+                          <span className="text-primary">{selectedTuning.meterValue}</span>
+                        </div>
+                        <div className="mb-2 h-7 rounded bg-[linear-gradient(90deg,color-mix(in_oklch,var(--primary)_28%,transparent),transparent)]" />
+                        <div className="h-1.5 rounded bg-muted">
+                          <div className="h-full rounded bg-primary" style={{ width: selectedTuning.meterValue }} />
+                        </div>
+                        <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                          <span>{selectedTuning.rangeLeft}</span>
+                          <span>{selectedTuning.rangeCenter}</span>
+                          <span>{selectedTuning.rangeRight}</span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {tuningTab === 'tone' && (
+                    <div className="space-y-1.5">
+                      <div className="rounded-md border border-border bg-background/70 p-2">
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <span className="text-[11px]">复刻音色</span>
+                          <span className="text-[10px] text-primary">按轨道应用</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {clonedVoices.map((name) => {
+                            const isCreate = name === '点击克隆'
+                            const active = !isCreate && activeTone === name
+                            return (
+                              <button
+                                key={name}
+                                onClick={() => !isCreate && setToneForCurrentTrack(name)}
+                                className={`flex items-center gap-2 rounded-md border p-2 text-left transition ${active
+                                    ? 'border-primary/40 bg-primary/10'
+                                    : 'border-border bg-card hover:border-primary/30'
+                                  }`}
+                              >
+                                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))] text-xs">
+                                  {isCreate ? '+' : '声'}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-[11px] font-medium">{name}</p>
+                                  <p className="text-[10px] text-primary">{isCreate ? '创建复刻' : '我的音色'}</p>
+                                </div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="rounded-md border border-border bg-background/70 p-2">
+                        <h3 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">优质音色</h3>
+                        <div className="mb-1.5 rounded-md border border-border bg-card/70 p-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              value={toneQuery}
+                              onChange={(event) => setToneQuery(event.target.value)}
+                              placeholder="AI关键词搜索：女声 温暖 解说"
+                              className="h-7 w-full rounded-md border border-border bg-card px-2 text-[11px] text-foreground outline-none focus:border-primary/40"
+                            />
+                            {(toneQuery || selectedToneTags.length > 0) && (
+                              <button
+                                onClick={clearToneFilter}
+                                className="h-7 shrink-0 rounded-md border border-border px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                              >
+                                清除
+                              </button>
+                            )}
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {curatedVoiceTags.map((tag) => {
+                              const active = selectedToneTags.includes(tag)
+                              return (
+                                <button
+                                  key={tag}
+                                  onClick={() => toggleToneTag(tag)}
+                                  className={`rounded-md border px-1.5 py-0.5 text-[10px] ${active
+                                      ? 'border-primary/40 bg-primary/15 text-primary'
+                                      : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                                    }`}
+                                >
+                                  {tag}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {filteredCuratedVoices.map((asset) => {
+                            const active = activeTone === asset.name
+                            return (
+                              <button
+                                key={asset.name}
+                                onClick={() => setToneForCurrentTrack(asset.name)}
+                                className={`flex items-center gap-2 rounded-md border p-2 text-left transition ${active
+                                    ? 'border-primary/40 bg-primary/10'
+                                    : 'border-border bg-card hover:border-primary/30'
+                                  }`}
+                              >
+                                <div className="h-8 w-8 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
+                                <div className="min-w-0">
+                                  <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                                  <p className="text-[10px] text-primary">智作优选</p>
+                                </div>
+                              </button>
+                            )
+                          })}
+                          {filteredCuratedVoices.length === 0 && (
+                            <p className="col-span-2 rounded-md border border-dashed border-border bg-background/70 p-2 text-[11px] text-muted-foreground">
+                              未命中音库结果，尝试更换关键词或减少标签。
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {tuningTab === 'speed' && (
+                    <div className="rounded-md border border-border bg-background/70 p-2">
+                      <div className="mb-1.5 flex items-center justify-between text-[11px]">
+                        <span>语速</span>
+                        <span className="text-primary">{activeSpeechRate.toFixed(2)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="1.8"
+                        step="0.05"
+                        value={activeSpeechRate}
+                        onChange={(event) => setSpeechRateForCurrentTrack(Number(event.target.value))}
+                        className="h-1.5 w-full accent-[var(--primary)]"
+                      />
+                      <div className="mt-1.5 flex gap-1">
+                        {[0.75, 1, 1.25, 1.5].map((rate) => {
+                          const active = Math.abs(activeSpeechRate - rate) < 0.001
+                          return (
+                            <button
+                              key={rate}
+                              onClick={() => setSpeechRateForCurrentTrack(rate)}
+                              className={`rounded-md border px-1.5 py-0.5 text-[10px] ${active
+                                  ? 'border-primary/40 bg-primary/15 text-primary'
+                                  : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                                }`}
+                            >
+                              {rate.toFixed(2)}x
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 text-[11px]">
+                    <button className="rounded-md border border-border bg-card px-2 py-1">重置</button>
+                    <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
+                      应用到轨道
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="rounded-md border border-dashed border-border bg-background/70 p-2 text-xs text-muted-foreground">
+                  请在时间轴中先选择一个轨道，再进行精细调优。
                 </p>
-              </div>
+              )}
             </section>
           </aside>
         </section>
 
-        <footer className="rounded-xl border border-border/80 bg-card/95 p-3 shadow-sm">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">AI 操作日志（可回退版本）</h2>
-            <div className="flex gap-2 text-xs">
-              <button className="rounded-md border border-border px-2 py-1">试听</button>
-              <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
-                应用当前版本
-              </button>
-            </div>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
-            {aiLogs.map((log) => (
-              <article key={log} className="rounded-md border border-border bg-background/70 p-2 text-xs">
-                {log}
-              </article>
-            ))}
-          </div>
-        </footer>
       </div>
     </main>
   )
