@@ -20,6 +20,13 @@ type PersonalAsset = {
   source: '收藏' | '项目升维' | 'AI创作'
   aiTags: string[]
 }
+type AiGenRecord = {
+  id: string
+  prompt: string
+  duration: number
+  results: string[]
+  createdAt: string
+}
 type ClipContextMenuState = {
   x: number
   y: number
@@ -188,8 +195,6 @@ const getTrackTuning = (trackName: string) => {
   }
 }
 
-const aiLogs: string[] = []
-
 const initialClonedVoices = ['音色01', '音色02']
 const curatedVoices: CuratedAsset[] = [
   { name: '机器人2', tags: ['AI声线', '科技', '中性'], keywords: ['机器人', '电子', '解说'] },
@@ -263,25 +268,6 @@ const demoProofreadItems: ProofreadIssueItem[] = [
     trackLabel: '人声-说话人1 · 原声对白',
   },
 ]
-
-const buildAiTags = (type: 'sfx' | 'music', blockName: string) => {
-  const baseTags = type === 'sfx' ? ['音效', '轨道提取'] : ['音乐', '轨道提取']
-  const rules: Array<[RegExp, string]> = [
-    [/转场|切换|过门/i, '转场'],
-    [/点击|按钮|提示/i, '交互'],
-    [/环境|氛围|ambient/i, '氛围'],
-    [/电子|赛博|pulse/i, '科技'],
-    [/钢琴|piano/i, '钢琴'],
-    [/低频|boom/i, '低频'],
-  ]
-  const matched = rules.filter(([pattern]) => pattern.test(blockName)).map(([, tag]) => tag)
-  return Array.from(new Set([...baseTags, ...matched, 'AI自动标注']))
-}
-
-const inferPersonalAssetType = (name: string): 'sfx' | 'music' => {
-  if (/bgm|music|配乐|钢琴|民谣|ambient|lo-?fi/i.test(name)) return 'music'
-  return 'sfx'
-}
 
 const formatAssetTypeLabel = (type: 'sfx' | 'music' | 'voice') => {
   if (type === 'sfx') return '音效'
@@ -370,16 +356,18 @@ const getProofreadMarkerColorClass = (levelLabel: string) => {
 
 export default function App() {
   const [assetTab, setAssetTab] = useState<AssetTab>('sfx')
+  const [assetNavExpanded, setAssetNavExpanded] = useState<Record<AssetTab, boolean>>({
+    sfx: true,
+    music: false,
+    voice: false,
+    my_assets: false,
+  })
   const [materialTabs, setMaterialTabs] = useState<MaterialTab[]>(initialMaterialTabs)
   const [activeMaterialId, setActiveMaterialId] = useState(initialMaterialTabs[0].id)
   const [selectedTrackKey, setSelectedTrackKey] = useState(
     `${initialMaterialTabs[0].id}::${initialMaterialTabs[0].tracks[0].name}`,
   )
   const [curatedQuery, setCuratedQuery] = useState<Record<LibraryFilterTab, string>>({ sfx: '', music: '' })
-  const [selectedCuratedTags, setSelectedCuratedTags] = useState<Record<LibraryFilterTab, string[]>>({
-    sfx: [],
-    music: [],
-  })
   const [toneQuery, setToneQuery] = useState('')
   const [selectedToneTags, setSelectedToneTags] = useState<string[]>([])
   const [tuningTab, setTuningTab] = useState<'basic' | 'tone' | 'speed'>('basic')
@@ -392,7 +380,6 @@ export default function App() {
   const assistantScrollContainerRef = useRef<HTMLDivElement | null>(null)
   const assistantScrollAnchorRef = useRef<HTMLDivElement | null>(null)
   const [assistantRangeLabel] = useState('01:10 - 01:45')
-  const [assetLogs, setAssetLogs] = useState(aiLogs)
   const [librarySubTab, setLibrarySubTab] = useState<Record<'sfx' | 'music', LibrarySubTab>>({
     sfx: 'curated',
     music: 'curated',
@@ -400,6 +387,14 @@ export default function App() {
   const [aiGenPromptByTab, setAiGenPromptByTab] = useState<Record<'sfx' | 'music', string>>({ sfx: '', music: '' })
   const [aiGenDurationByTab, setAiGenDurationByTab] = useState<Record<'sfx' | 'music', number>>({ sfx: 5, music: 60 })
   const [aiGenResultsByTab, setAiGenResultsByTab] = useState<Record<'sfx' | 'music', string[]>>({ sfx: [], music: [] })
+  const [aiGenViewByTab, setAiGenViewByTab] = useState<Record<'sfx' | 'music', 'input' | 'history'>>({
+    sfx: 'input',
+    music: 'input',
+  })
+  const [aiGenRecordsByTab, setAiGenRecordsByTab] = useState<Record<'sfx' | 'music', AiGenRecord[]>>({
+    sfx: [],
+    music: [],
+  })
   const [voiceStage, setVoiceStage] = useState<'main' | 'picker'>('main')
   const [voiceActor, setVoiceActor] = useState('魔天河')
   const [voiceScript, setVoiceScript] = useState('')
@@ -409,13 +404,15 @@ export default function App() {
   const [voiceResult, setVoiceResult] = useState('')
   const [myAssetSubTab, setMyAssetSubTab] = useState<'project' | 'personal'>('project')
   const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>(initialProjectAssets)
-  const [personalAssets, setPersonalAssets] = useState<PersonalAsset[]>(initialPersonalAssets)
+  const [personalAssets] = useState<PersonalAsset[]>(initialPersonalAssets)
   const [personalAssetQuery, setPersonalAssetQuery] = useState('')
-  const [personalTagFilters, setPersonalTagFilters] = useState<string[]>([])
+  const [personalAssetTypeFilter, setPersonalAssetTypeFilter] = useState<'all' | 'music' | 'sfx' | 'voice'>('all')
   const [timelineSelectionLabel, setTimelineSelectionLabel] = useState('01:10 - 01:45')
   const [smartLoading, setSmartLoading] = useState(false)
   const [smartTargetTab, setSmartTargetTab] = useState<'sfx' | 'music' | null>(null)
   const [smartQueryByTab, setSmartQueryByTab] = useState<Record<'sfx' | 'music', string>>({ sfx: '', music: '' })
+  const [sfxNavTag, setSfxNavTag] = useState('热门')
+  const [musicNavTag, setMusicNavTag] = useState('热门')
   const [hoverPreviewAsset, setHoverPreviewAsset] = useState('')
   const [smartActionMenuClip, setSmartActionMenuClip] = useState('')
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenuState | null>(null)
@@ -459,18 +456,14 @@ export default function App() {
   const activeTone = selectedTrackKey ? selectedToneByTrack[selectedTrackKey] ?? toneOptions[0] : toneOptions[0]
   const activeSpeechRate = selectedTrackKey ? speechRateByTrack[selectedTrackKey] ?? 1 : 1
   const filteredCuratedVoices = filterCuratedAssets(curatedVoices, toneQuery, selectedToneTags)
-  const filteredCuratedSfx = filterCuratedAssets(curatedSfx, curatedQuery.sfx, selectedCuratedTags.sfx)
-  const filteredCuratedMusic = filterCuratedAssets(curatedMusic, curatedQuery.music, selectedCuratedTags.music)
-  const projectVideoAssets = projectAssets.filter((asset) => asset.category === 'video')
-  const projectAudioAssets = projectAssets.filter((asset) => asset.category === 'audio')
-  const projectTempAssets = projectAssets.filter((asset) => asset.category === 'temp')
-  const allPersonalTags = Array.from(new Set(personalAssets.flatMap((asset) => asset.aiTags)))
+  const sfxNavTags = ['热门', '赛博', '冲击', '转场', '自然']
+  const musicNavTags = ['热门', '温暖', '悬疑', '电子', 'Ambient']
   const filteredPersonalAssets = personalAssets.filter((asset) => {
     const searchText = `${asset.name} ${asset.type} ${asset.aiTags.join(' ')}`.toLowerCase()
     const terms = personalAssetQuery.toLowerCase().split(/\s+/).filter(Boolean)
     const queryMatched = terms.length === 0 || terms.every((term) => searchText.includes(term))
-    const tagsMatched = personalTagFilters.length === 0 || personalTagFilters.every((tag) => asset.aiTags.includes(tag))
-    return queryMatched && tagsMatched
+    const typeMatched = personalAssetTypeFilter === 'all' || asset.type === personalAssetTypeFilter
+    return queryMatched && typeMatched
   })
   const selectedClipCount = selectedClipKey ? 1 : 0
   const assistantFocusLabel = selectedTrack
@@ -482,12 +475,28 @@ export default function App() {
     '正在检查同期背景轨：[当前无 BGM]',
   ]
   const curatedVoiceTags = getCuratedTags(curatedVoices)
-  const curatedSfxTags = getCuratedTags(curatedSfx)
-  const curatedMusicTags = getCuratedTags(curatedMusic)
   const activeAssetLibraryTab = assetTab === 'music' ? 'music' : 'sfx'
-  const activeCuratedAssets = assetTab === 'music' ? filteredCuratedMusic : filteredCuratedSfx
-  const activeCuratedTags = assetTab === 'music' ? curatedMusicTags : curatedSfxTags
   const smartSearchActive = Boolean(smartQueryByTab[activeAssetLibraryTab])
+  const sfxQueryTerms = curatedQuery.sfx
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+  const sfxFilteredAssets = curatedSfx.filter((asset) => {
+    const tagMatched = sfxNavTag === '热门' || asset.tags.includes(sfxNavTag)
+    if (!tagMatched) return false
+    const searchText = `${asset.name} ${asset.tags.join(' ')} ${asset.keywords.join(' ')}`.toLowerCase()
+    return sfxQueryTerms.length === 0 || sfxQueryTerms.every((term) => searchText.includes(term))
+  })
+  const musicQueryTerms = curatedQuery.music
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+  const musicFilteredAssets = curatedMusic.filter((asset) => {
+    const tagMatched = musicNavTag === '热门' || asset.tags.includes(musicNavTag)
+    if (!tagMatched) return false
+    const searchText = `${asset.name} ${asset.tags.join(' ')} ${asset.keywords.join(' ')}`.toLowerCase()
+    return musicQueryTerms.length === 0 || musicQueryTerms.every((term) => searchText.includes(term))
+  })
   const firstVoiceTrackIndex = activeMaterial ? activeMaterial.tracks.findIndex((track) => track.name.startsWith('人声')) : -1
   const activeVoiceTracks = activeMaterial ? activeMaterial.tracks.filter((track) => track.name.startsWith('人声')) : []
   const activeVoiceGroupCollapsed = activeMaterial ? Boolean(voiceGroupCollapsedByMaterial[activeMaterial.id]) : false
@@ -660,16 +669,6 @@ export default function App() {
     setSelectedTrackKey(`${activeMaterial.id}::视频`)
   }
 
-  const toggleCuratedTag = (tab: LibraryFilterTab, tag: string) => {
-    setSelectedCuratedTags((prev) => {
-      const exists = prev[tab].includes(tag)
-      return {
-        ...prev,
-        [tab]: exists ? prev[tab].filter((item) => item !== tag) : [...prev[tab], tag],
-      }
-    })
-  }
-
   const toggleToneTag = (tag: string) => {
     setSelectedToneTags((prev) => (prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag]))
   }
@@ -694,11 +693,30 @@ export default function App() {
     if (!prompt) return
     const prefix = tab === 'sfx' ? '音效' : '音乐'
     const duration = aiGenDurationByTab[tab]
+    const generatedResults = Array.from({ length: 4 }, (_, index) => `${prefix}变体 ${index + 1} · ${duration}s`)
+    const now = new Date()
+    const createdAt = `${now.toLocaleDateString('zh-CN')} ${now.toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })}`
     setAiGenResultsByTab((prev) => ({
       ...prev,
-      [tab]: Array.from({ length: 4 }, (_, index) => `${prefix}变体 ${index + 1} · ${duration}s`),
+      [tab]: generatedResults,
     }))
-    setAssetLogs((prev) => [`AI生成：${prefix} ${duration}s ×4（提示词：${prompt}）`, ...prev])
+    setAiGenRecordsByTab((prev) => ({
+      ...prev,
+      [tab]: [
+        {
+          id: `${tab}-${Date.now()}`,
+          prompt,
+          duration,
+          results: generatedResults,
+          createdAt,
+        },
+        ...prev[tab],
+      ],
+    }))
+    setAiGenViewByTab((prev) => ({ ...prev, [tab]: 'history' }))
   }
 
   const triggerSmartMatch = (target: 'sfx' | 'music') => {
@@ -837,22 +855,6 @@ export default function App() {
     setAssetTab('my_assets')
     setMyAssetSubTab('project')
     setClipContextMenu(null)
-  }
-
-  const promoteProjectAssetToPersonal = (assetId: string) => {
-    const target = projectAssets.find((item) => item.id === assetId)
-    if (!target) return
-    const type = inferPersonalAssetType(target.name)
-    const nextPersonalAsset: PersonalAsset = {
-      id: `personal-${Date.now()}`,
-      name: target.name,
-      type,
-      source: '项目升维',
-      aiTags: buildAiTags(type, target.name),
-    }
-    setPersonalAssets((prev) => [nextPersonalAsset, ...prev])
-    setProjectAssets((prev) => prev.filter((item) => item.id !== assetId))
-    setMyAssetSubTab('personal')
   }
 
   const applyCurrentTuning = () => {
@@ -1054,71 +1056,187 @@ export default function App() {
           </div>
         </header>
 
-        <section className="grid gap-0 xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+        <section className="grid gap-0 xl:grid-cols-[330px_minmax(0,1fr)_320px]">
           <aside className="space-y-0 p-2 xl:border-r xl:border-border/70">
             <section className="pb-2">
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">资产管理</h2>
               </div>
-              <div className="mb-2 grid grid-cols-4 gap-1 text-[11px]">
-                {[
-                  ['sfx', '音效库'],
-                  ['music', '音乐库'],
-                  ['voice', '配音库'],
-                  ['my_assets', '我的资产'],
-                ].map(([key, label]) => {
-                  const active = assetTab === key
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => setAssetTab(key as AssetTab)}
-                      className={`whitespace-nowrap rounded-md border px-1.5 py-1 transition ${
-                        active ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-background text-muted-foreground'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
+              <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 rounded-lg bg-[linear-gradient(180deg,color-mix(in_oklch,var(--muted)_55%,transparent),transparent)] p-1.5">
+                <nav className="space-y-1.5 rounded-md bg-background/80 p-1.5">
+                  {[
+                    ['sfx', '音效库', '♪'],
+                    ['music', '音乐库', '♫'],
+                    ['voice', '文本配音', '◉'],
+                    ['my_assets', '我的资产', '★'],
+                  ].map(([key, label, icon]) => {
+                    const groupKey = key as AssetTab
+                    const activeGroup = assetTab === groupKey
+                    const expanded = assetNavExpanded[groupKey]
+                    if (groupKey === 'voice') {
+                      return (
+                        <button
+                          key={groupKey}
+                          onClick={() => setAssetTab('voice')}
+                          className={`flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-left text-[11px] ${
+                            activeGroup
+                              ? 'bg-primary/15 font-medium text-primary'
+                              : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                          }`}
+                        >
+                          <span className="text-[10px]">{icon}</span>
+                          <span className="truncate">{label}</span>
+                        </button>
+                      )
+                    }
+                    return (
+                      <div key={groupKey} className="rounded-md bg-card/55">
+                        <button
+                          onClick={() => {
+                            if (!expanded) {
+                              if (groupKey === 'sfx') {
+                                setAssetTab('sfx')
+                                setLibrarySubTab((prev) => ({ ...prev, sfx: 'ai' }))
+                              }
+                              if (groupKey === 'music') {
+                                setAssetTab('music')
+                                setLibrarySubTab((prev) => ({ ...prev, music: 'ai' }))
+                              }
+                              if (groupKey === 'my_assets') {
+                                setAssetTab('my_assets')
+                                setMyAssetSubTab('project')
+                              }
+                            }
+                            setAssetNavExpanded((prev) => ({
+                              ...prev,
+                              [groupKey]: !prev[groupKey],
+                            }))
+                          }}
+                          className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[11px] ${
+                            activeGroup
+                              ? 'text-foreground'
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          <span className="flex items-center gap-1">
+                            <span className="text-[10px]">{expanded ? '▾' : '▸'}</span>
+                            <span className="text-[10px]">{icon}</span>
+                            <span className="truncate">{label}</span>
+                          </span>
+                        </button>
+                        {expanded && (
+                          <div className="space-y-1 px-2 pb-2">
+                            {groupKey === 'sfx' && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setAssetTab('sfx')
+                                    setLibrarySubTab((prev) => ({ ...prev, sfx: 'ai' }))
+                                  }}
+                                  className={`w-full rounded-md px-2 py-1 text-left text-[10px] ${
+                                    assetTab === 'sfx' && librarySubTab.sfx === 'ai'
+                                      ? 'bg-primary/15 text-primary'
+                                      : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                                  }`}
+                                >
+                                  AI音效
+                                </button>
+                                {sfxNavTags.map((tag) => (
+                                  <button
+                                    key={tag}
+                                    onClick={() => {
+                                      setAssetTab('sfx')
+                                      setLibrarySubTab((prev) => ({ ...prev, sfx: 'curated' }))
+                                      setSfxNavTag(tag)
+                                    }}
+                                    className={`w-full rounded-md px-2 py-1 text-left text-[10px] ${
+                                      assetTab === 'sfx' && librarySubTab.sfx === 'curated' && sfxNavTag === tag
+                                        ? 'bg-primary/15 text-primary'
+                                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                                    }`}
+                                  >
+                                    {tag}
+                                  </button>
+                                ))}
+                              </>
+                            )}
+                            {groupKey === 'music' && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setAssetTab('music')
+                                    setLibrarySubTab((prev) => ({ ...prev, music: 'ai' }))
+                                  }}
+                                  className={`w-full rounded-md px-2 py-1 text-left text-[10px] ${
+                                    assetTab === 'music' && librarySubTab.music === 'ai'
+                                      ? 'bg-primary/15 text-primary'
+                                      : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                                  }`}
+                                >
+                                  AI音乐
+                                </button>
+                                {musicNavTags.map((tag) => (
+                                  <button
+                                    key={tag}
+                                    onClick={() => {
+                                      setAssetTab('music')
+                                      setLibrarySubTab((prev) => ({ ...prev, music: 'curated' }))
+                                      setMusicNavTag(tag)
+                                    }}
+                                    className={`w-full rounded-md px-2 py-1 text-left text-[10px] ${
+                                      assetTab === 'music' && librarySubTab.music === 'curated' && musicNavTag === tag
+                                        ? 'bg-primary/15 text-primary'
+                                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                                    }`}
+                                  >
+                                    {tag}
+                                  </button>
+                                ))}
+                              </>
+                            )}
+                            {groupKey === 'my_assets' && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setAssetTab('my_assets')
+                                    setMyAssetSubTab('project')
+                                  }}
+                                  className={`w-full rounded-md px-2 py-1 text-left text-[10px] ${
+                                    assetTab === 'my_assets' && myAssetSubTab === 'project'
+                                      ? 'bg-primary/15 text-primary'
+                                      : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                                  }`}
+                                >
+                                  项目素材
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setAssetTab('my_assets')
+                                    setMyAssetSubTab('personal')
+                                  }}
+                                  className={`w-full rounded-md px-2 py-1 text-left text-[10px] ${
+                                    assetTab === 'my_assets' && myAssetSubTab === 'personal'
+                                      ? 'bg-primary/15 text-primary'
+                                      : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                                  }`}
+                                >
+                                  个人资产
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </nav>
+
+                <div className="space-y-2 rounded-md bg-background/65 p-2">
 
               {(assetTab === 'sfx' || assetTab === 'music') && (
                 <div className="space-y-2 text-xs">
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'curated' }))}
-                      className={`rounded-full border px-2 py-1 text-[11px] ${
-                        librarySubTab[activeAssetLibraryTab] === 'curated'
-                          ? 'border-primary/40 bg-primary/15 text-primary'
-                          : 'border-border bg-card text-muted-foreground'
-                      }`}
-                    >
-                      优质{activeAssetLibraryTab === 'sfx' ? '音效' : '音乐'}库
-                    </button>
-                    <button
-                      onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))}
-                      className={`rounded-full border px-2 py-1 text-[11px] ${
-                        librarySubTab[activeAssetLibraryTab] === 'ai'
-                          ? 'border-primary/40 bg-primary/15 text-primary'
-                          : 'border-border bg-card text-muted-foreground'
-                      }`}
-                    >
-                      AI 创作
-                    </button>
-                  </div>
-
                   {librarySubTab[activeAssetLibraryTab] === 'curated' ? (
                     <>
-                      <input
-                        value={curatedQuery[activeAssetLibraryTab]}
-                        onChange={(event) => {
-                          const next = event.target.value
-                          setSmartQueryByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: next }))
-                          setCuratedQuery((prev) => ({ ...prev, [activeAssetLibraryTab]: next }))
-                        }}
-                        placeholder="输入标签或自然语言描述搜索"
-                        className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
-                      />
                       {smartLoading && smartTargetTab === activeAssetLibraryTab && (
                         <div className="rounded-md border border-border bg-background/70 p-2">
                           <p className="mb-1 text-[11px] text-primary">AI 正在解读画面与情绪...</p>
@@ -1129,115 +1247,213 @@ export default function App() {
                           </div>
                         </div>
                       )}
-                      <div className="rounded-md border border-border bg-background/60 p-2">
-                        <div className="mb-1.5 flex flex-wrap gap-1">
-                          {activeCuratedTags.map((tag) => {
-                            const active = selectedCuratedTags[activeAssetLibraryTab].includes(tag)
-                            return (
-                              <button
-                                key={tag}
-                                onClick={() => toggleCuratedTag(activeAssetLibraryTab, tag)}
-                                className={`rounded-md border px-1.5 py-0.5 text-[10px] ${
-                                  active ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-card text-muted-foreground'
-                                }`}
+                      <div className={`rounded-md bg-background/60 p-2 ${activeAssetLibraryTab === 'music' ? 'border border-border' : ''}`}>
+                        {activeAssetLibraryTab === 'sfx' ? (
+                          <div className="space-y-2">
+                            <div className="relative">
+                              <textarea
+                                value={curatedQuery.sfx}
+                                onChange={(event) => {
+                                  const next = event.target.value
+                                  setSmartQueryByTab((prev) => ({ ...prev, sfx: next }))
+                                  setCuratedQuery((prev) => ({ ...prev, sfx: next }))
+                                }}
+                                placeholder={'输入标签或自然语言描述\n例如：赛博感的能量冲击转场'}
+                                className="h-14 w-full resize-none rounded-md border border-primary/35 bg-card px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary/55"
+                              />
+                            </div>
+                            {sfxFilteredAssets.map((asset) => (
+                              <article
+                                key={asset.name}
+                                onMouseEnter={() => {
+                                  setHoverPreviewAsset(asset.name)
+                                }}
+                                onMouseLeave={() => setHoverPreviewAsset('')}
+                                className="rounded-md border border-border bg-card/70 px-2 py-1.5"
                               >
-                                {tag}
-                              </button>
-                            )
-                          })}
-                        </div>
-                        <div className="space-y-1">
-                          {activeCuratedAssets.map((asset) => (
-                            <article
-                              key={asset.name}
-                              onMouseEnter={() => {
-                                setHoverPreviewAsset(asset.name)
-                              }}
-                              onMouseLeave={() => setHoverPreviewAsset('')}
-                              className="rounded-md border border-border bg-card/70 px-2 py-1.5"
-                            >
-                              <div className="flex items-center justify-between text-[11px]">
-                                <p className="truncate font-medium">{asset.name}</p>
-                                <div className="flex items-center gap-1">
-                                  {smartSearchActive && (
-                                    <span className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">💡 高优匹配</span>
-                                  )}
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <p className="truncate font-medium">{asset.name}</p>
                                   <span className="text-[10px] text-muted-foreground">{asset.name.length + 8}s · {80 + (asset.name.length % 50)}BPM</span>
                                 </div>
-                              </div>
-                              <div className="mt-1 h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(2,132,199,0.3)_0,rgba(2,132,199,0.3)_2px,transparent_2px,transparent_7px)]" />
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {asset.tags.map((tag) => (
-                                  <span
-                                    key={`${asset.name}-${tag}`}
-                                    className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary"
-                                  >
-                                    {tag}
-                                  </span>
-                                ))}
-                              </div>
-                            </article>
-                          ))}
-                          {activeCuratedAssets.length === 0 && (
-                            <button
-                              onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))}
-                              className="text-[11px] text-primary underline"
-                            >
-                              没找到想要的？去 👉 AI创作 定制专属{activeAssetLibraryTab === 'sfx' ? '音效' : '音乐'}
-                            </button>
-                          )}
-                          {activeCuratedAssets.length > 0 && (
-                            <button
-                              onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))}
-                              className="pt-1 text-[10px] text-muted-foreground underline"
-                            >
-                              没找到想要的？去 👉 AI创作
-                            </button>
-                          )}
-                        </div>
+                                <div className="mt-1 h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(2,132,199,0.3)_0,rgba(2,132,199,0.3)_2px,transparent_2px,transparent_7px)]" />
+                              </article>
+                            ))}
+                            {sfxFilteredAssets.length === 0 && (
+                              <button
+                                onClick={() => {
+                                  setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))
+                                  setAiGenViewByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'input' }))
+                                  setAiGenPromptByTab((prev) => ({
+                                    ...prev,
+                                    [activeAssetLibraryTab]: curatedQuery[activeAssetLibraryTab].trim() || prev[activeAssetLibraryTab],
+                                  }))
+                                }}
+                                className="text-[11px] text-primary underline"
+                              >
+                                没找到想要的？去 👉 AI创作 定制专属音效
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            <textarea
+                              value={curatedQuery.music}
+                              onChange={(event) => {
+                                const next = event.target.value
+                                setSmartQueryByTab((prev) => ({ ...prev, music: next }))
+                                setCuratedQuery((prev) => ({ ...prev, music: next }))
+                              }}
+                              placeholder={'输入标签或自然语言描述\n例如：温暖叙事感的木吉他配乐'}
+                              className="mb-1 h-14 w-full resize-none rounded-md border border-primary/35 bg-card px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary/55"
+                            />
+                            {musicFilteredAssets.map((asset) => (
+                              <article
+                                key={asset.name}
+                                onMouseEnter={() => {
+                                  setHoverPreviewAsset(asset.name)
+                                }}
+                                onMouseLeave={() => setHoverPreviewAsset('')}
+                                className="rounded-md border border-border bg-card/70 px-2 py-1.5"
+                              >
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <p className="truncate font-medium">{asset.name}</p>
+                                  <div className="flex items-center gap-1">
+                                    {smartSearchActive && (
+                                      <span className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">💡 高优匹配</span>
+                                    )}
+                                    <span className="text-[10px] text-muted-foreground">{asset.name.length + 8}s · {80 + (asset.name.length % 50)}BPM</span>
+                                  </div>
+                                </div>
+                                <div className="mt-1 h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(2,132,199,0.3)_0,rgba(2,132,199,0.3)_2px,transparent_2px,transparent_7px)]" />
+                              </article>
+                            ))}
+                            {musicFilteredAssets.length === 0 && (
+                              <button
+                                onClick={() => {
+                                  setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))
+                                  setAiGenViewByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'input' }))
+                                  setAiGenPromptByTab((prev) => ({
+                                    ...prev,
+                                    [activeAssetLibraryTab]: curatedQuery[activeAssetLibraryTab].trim() || prev[activeAssetLibraryTab],
+                                  }))
+                                }}
+                                className="text-[11px] text-primary underline"
+                              >
+                                没找到想要的？去 👉 AI创作 定制专属音乐
+                              </button>
+                            )}
+                            {musicFilteredAssets.length > 0 && (
+                              <button
+                                onClick={() => {
+                                  setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))
+                                  setAiGenViewByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'input' }))
+                                  setAiGenPromptByTab((prev) => ({
+                                    ...prev,
+                                    [activeAssetLibraryTab]: curatedQuery[activeAssetLibraryTab].trim() || prev[activeAssetLibraryTab],
+                                  }))
+                                }}
+                                className="pt-1 text-[10px] text-muted-foreground underline"
+                              >
+                                没找到想要的？去 👉 AI创作
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </>
                   ) : (
-                    <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-2">
-                      <textarea
-                        value={aiGenPromptByTab[activeAssetLibraryTab]}
-                        onChange={(event) => setAiGenPromptByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: event.target.value }))}
-                        placeholder={`请输入描述，如：三个人在雨中泥泞奔跑...`}
-                        className="h-20 w-full rounded-md border border-border bg-card px-2 py-1.5 text-[11px] outline-none"
-                      />
-                      <div>
-                        <p className="mb-1 text-[10px] text-muted-foreground">时长</p>
-                        <div className="flex gap-1">
-                          {(activeAssetLibraryTab === 'music' ? [30, 60, 90] : [3, 5, 10]).map((duration) => (
+                    <div className="space-y-2">
+                      <div className="rounded-md bg-card/70 p-1">
+                        <div className="grid grid-cols-2 gap-1">
+                          {[
+                            ['input', '输入要求'],
+                            ['history', '生成记录'],
+                          ].map(([key, label]) => (
                             <button
-                              key={duration}
-                              onClick={() => setAiGenDurationByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: duration }))}
-                              className={`rounded-md border px-2 py-0.5 text-[10px] ${
-                                aiGenDurationByTab[activeAssetLibraryTab] === duration
-                                  ? 'border-primary/40 bg-primary/15 text-primary'
-                                  : 'border-border bg-card text-muted-foreground'
+                              key={key}
+                              onClick={() => setAiGenViewByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: key as 'input' | 'history' }))}
+                              className={`rounded-md px-2 py-1 text-[11px] ${
+                                aiGenViewByTab[activeAssetLibraryTab] === key
+                                  ? 'bg-primary/15 text-primary'
+                                  : 'bg-background/80 text-muted-foreground hover:text-foreground'
                               }`}
                             >
-                              {duration}秒
+                              {label}
                             </button>
                           ))}
                         </div>
                       </div>
-                      <button
-                        onClick={() => triggerAssetAiGenerate(activeAssetLibraryTab)}
-                        className="w-full rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary"
-                      >
-                        🪄 立即生成
-                      </button>
-                      {aiGenResultsByTab[activeAssetLibraryTab].length > 0 && (
+                      {aiGenViewByTab[activeAssetLibraryTab] === 'input' ? (
+                        <>
+                          <textarea
+                            value={aiGenPromptByTab[activeAssetLibraryTab]}
+                            onChange={(event) => setAiGenPromptByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: event.target.value }))}
+                            placeholder={`请输入描述，如：三个人在雨中泥泞奔跑...`}
+                            className="h-20 w-full rounded-md border border-border bg-card px-2 py-1.5 text-[11px] outline-none"
+                          />
+                          <div>
+                            <p className="mb-1 text-[10px] text-muted-foreground">时长</p>
+                            <div className="flex gap-1">
+                              {(activeAssetLibraryTab === 'music' ? [30, 60, 90] : [3, 5, 10]).map((duration) => (
+                                <button
+                                  key={duration}
+                                  onClick={() => setAiGenDurationByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: duration }))}
+                                  className={`rounded-md border px-2 py-0.5 text-[10px] ${
+                                    aiGenDurationByTab[activeAssetLibraryTab] === duration
+                                      ? 'border-primary/40 bg-primary/15 text-primary'
+                                      : 'border-border bg-card text-muted-foreground'
+                                  }`}
+                                >
+                                  {duration}秒
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => triggerAssetAiGenerate(activeAssetLibraryTab)}
+                            className="w-full rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary"
+                          >
+                            🪄 立即生成
+                          </button>
+                          {aiGenResultsByTab[activeAssetLibraryTab].length > 0 && (
+                            <div className="space-y-1.5">
+                              {aiGenResultsByTab[activeAssetLibraryTab].map((item) => (
+                                <article key={item} className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                                  <div className="mb-1 flex items-center justify-between">
+                                    <p className="text-[11px] font-medium">{item}</p>
+                                    <span className="text-[10px] text-muted-foreground">可拖拽</span>
+                                  </div>
+                                  <div className="h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(59,130,246,0.35)_0,rgba(59,130,246,0.35)_2px,transparent_2px,transparent_6px)]" />
+                                </article>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
                         <div className="space-y-1.5">
-                          {aiGenResultsByTab[activeAssetLibraryTab].map((item) => (
-                            <article key={item} className="rounded-md border border-border bg-background/70 px-2 py-1.5">
-                              <div className="mb-1 flex items-center justify-between">
-                                <p className="text-[11px] font-medium">{item}</p>
-                                <span className="text-[10px] text-muted-foreground">可拖拽</span>
+                          {aiGenRecordsByTab[activeAssetLibraryTab].length === 0 && (
+                            <p className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-[10px] text-muted-foreground">
+                              暂无生成记录
+                            </p>
+                          )}
+                          {aiGenRecordsByTab[activeAssetLibraryTab].map((record) => (
+                            <article key={record.id} className="rounded-md border border-border bg-background/80 px-2 py-1.5">
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <p className="truncate text-[11px] font-medium">提示词：{record.prompt}</p>
+                                <span className="shrink-0 text-[10px] text-muted-foreground">{record.createdAt}</span>
                               </div>
-                              <div className="h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(59,130,246,0.35)_0,rgba(59,130,246,0.35)_2px,transparent_2px,transparent_6px)]" />
+                              <p className="mb-1 text-[10px] text-muted-foreground">时长：{record.duration}秒 · 变体：{record.results.length}</p>
+                              <div className="space-y-1">
+                                {record.results.map((item) => (
+                                  <div key={`${record.id}-${item}`} className="rounded border border-border/80 bg-card/70 px-1.5 py-1">
+                                    <div className="mb-0.5 flex items-center justify-between">
+                                      <p className="text-[10px]">{item}</p>
+                                      <span className="text-[9px] text-muted-foreground">可拖拽</span>
+                                    </div>
+                                    <div className="h-3 rounded bg-[repeating-linear-gradient(90deg,rgba(59,130,246,0.35)_0,rgba(59,130,246,0.35)_2px,transparent_2px,transparent_6px)]" />
+                                  </div>
+                                ))}
+                              </div>
                             </article>
                           ))}
                         </div>
@@ -1318,166 +1534,88 @@ export default function App() {
 
               {assetTab === 'my_assets' && (
                 <div className="space-y-2 text-xs">
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      onClick={() => setMyAssetSubTab('project')}
-                      className={`rounded-full border px-2 py-1 text-[11px] ${
-                        myAssetSubTab === 'project'
-                          ? 'border-primary/40 bg-primary/15 text-primary'
-                          : 'border-border bg-card text-muted-foreground'
-                      }`}
-                    >
-                      项目素材
-                    </button>
-                    <button
-                      onClick={() => setMyAssetSubTab('personal')}
-                      className={`rounded-full border px-2 py-1 text-[11px] ${
-                        myAssetSubTab === 'personal'
-                          ? 'border-primary/40 bg-primary/15 text-primary'
-                          : 'border-border bg-card text-muted-foreground'
-                      }`}
-                    >
-                      个人资产
-                    </button>
-                  </div>
-
-                  {myAssetSubTab === 'project' ? (
-                    <div className="space-y-2">
-                      <div className="rounded-md border border-dashed border-primary/40 bg-primary/5 px-2 py-2 text-[11px] text-primary">
-                        拖拽视频/同期声/临时素材到项目中使用
-                      </div>
-                      {[
-                        { title: '视频素材', assets: projectVideoAssets },
-                        { title: '同期声/原始录音', assets: projectAudioAssets },
-                        { title: '临时生成记录', assets: projectTempAssets },
-                      ].map((section) => (
-                        <div key={section.title} className="rounded-md border border-border bg-background/70 p-2">
-                          <div className="mb-1 flex items-center justify-between">
-                            <p className="text-[11px] font-semibold">{section.title}</p>
-                            <span className="text-[10px] text-muted-foreground">{section.assets.length} 条</span>
-                          </div>
-                          <div className="space-y-1">
-                            {section.assets.length === 0 && <p className="text-[10px] text-muted-foreground">暂无内容</p>}
-                            {section.assets.map((asset) => (
-                              <article key={asset.id} className="rounded-md border border-border bg-card px-2 py-1.5">
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="truncate text-[11px] font-medium">{asset.name}</p>
-                                  <span className="text-[10px] text-muted-foreground">{asset.duration}</span>
-                                </div>
-                                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                  <div className="space-y-2 rounded-md bg-background/65 p-2">
+                    {myAssetSubTab === 'project' ? (
+                      <>
+                        <div className="space-y-2">
+                          <button className="flex w-full items-center gap-2 rounded-md border border-border bg-card/70 p-2 text-left">
+                            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-md bg-background/70 text-2xl text-primary">⬆</div>
+                            <div>
+                              <p className="text-[11px] font-medium">导入媒体</p>
+                            </div>
+                          </button>
+                          {projectAssets.map((asset) => (
+                            <article key={asset.id} className="flex items-center gap-2 rounded-md border border-border bg-card/70 p-2">
+                              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-md bg-background/70 text-2xl text-muted-foreground">
+                                {asset.category === 'video' ? '🎬' : asset.category === 'audio' ? '🎵' : '🎧'}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                                <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
                                   {asset.category === 'video' ? `视频 · ${asset.resolution ?? '-'}` : asset.category === 'audio' ? '原始录音' : '临时产物'}
-                                  {asset.note ? ` · ${asset.note}` : ''}
                                 </p>
-                                {asset.category !== 'video' && (
-                                  <button
-                                    onClick={() => promoteProjectAssetToPersonal(asset.id)}
-                                    className="mt-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
-                                  >
-                                    ✨ 存入个人库
-                                  </button>
-                                )}
-                              </article>
-                            ))}
-                          </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[10px] font-semibold text-foreground">{asset.duration}</p>
+                              </div>
+                            </article>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <input
-                        value={personalAssetQuery}
-                        onChange={(event) => setPersonalAssetQuery(event.target.value)}
-                        placeholder="输入标签或自然语言描述搜索"
-                        className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
-                      />
-                      <div className="flex flex-wrap gap-1 rounded-md border border-border bg-background/70 p-2">
-                        {allPersonalTags.map((tag) => {
-                          const active = personalTagFilters.includes(tag)
-                          return (
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex gap-1 rounded-md bg-card/70 p-1">
+                          {[
+                            ['all', '全部'],
+                            ['music', '音乐'],
+                            ['sfx', '音效'],
+                          ].map(([key, label]) => (
                             <button
-                              key={tag}
-                              onClick={() =>
-                                setPersonalTagFilters((prev) =>
-                                  prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
-                                )
-                              }
-                              className={`rounded-md border px-1.5 py-0.5 text-[10px] ${
-                                active ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-card text-muted-foreground'
+                              key={key}
+                              onClick={() => setPersonalAssetTypeFilter(key as 'all' | 'music' | 'sfx')}
+                              className={`rounded-md px-2 py-1 text-[10px] ${
+                                personalAssetTypeFilter === key
+                                  ? 'bg-primary/15 text-primary'
+                                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
                               }`}
                             >
-                              {tag}
+                              {label}
                             </button>
-                          )
-                        })}
-                      </div>
-                      <div className="space-y-1 rounded-md border border-border bg-background/70 p-2">
-                        <p className="text-[11px] font-semibold">个人音效/BGM库</p>
-                        {filteredPersonalAssets.length === 0 && <p className="text-[10px] text-muted-foreground">没有匹配结果</p>}
-                        {filteredPersonalAssets.map((asset) => (
-                          <article key={asset.id} className="rounded-md border border-border bg-card px-2 py-1.5">
-                            <div className="flex items-center justify-between">
-                              <p className="truncate text-[11px] font-medium">{asset.name}</p>
-                              <span className="text-[10px] text-muted-foreground">{formatAssetTypeLabel(asset.type)}</span>
-                            </div>
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {asset.aiTags.map((tag) => (
-                                <span key={`${asset.id}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                      <div className="space-y-1 rounded-md border border-border bg-background/70 p-2">
-                        <p className="text-[11px] font-semibold">我的专属音色</p>
-                        {clonedVoiceItems.map((voiceName) => (
-                          <article key={voiceName} className="rounded-md border border-border bg-card px-2 py-1.5">
-                            <div className="flex items-center justify-between">
-                              <p className="truncate text-[11px] font-medium">{voiceName}</p>
-                              <span className="text-[10px] text-muted-foreground">音色</span>
-                            </div>
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {['专属', '克隆音色', '可复用'].map((tag) => (
-                                <span key={`${voiceName}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                          ))}
+                        </div>
+                        <input
+                          value={personalAssetQuery}
+                          onChange={(event) => setPersonalAssetQuery(event.target.value)}
+                          placeholder="输入标签或自然语言描述搜索"
+                          className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+                        />
+                        <div className="space-y-1 rounded-md bg-card/70 p-0">
+                          {filteredPersonalAssets.length === 0 && <p className="px-2 py-1.5 text-[10px] text-muted-foreground">没有匹配结果</p>}
+                          {filteredPersonalAssets.map((asset) => (
+                            <article key={asset.id} className="rounded-md border border-border bg-background px-2 py-1.5">
+                              <div className="flex items-center justify-between">
+                                <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                                <span className="text-[10px] text-muted-foreground">{formatAssetTypeLabel(asset.type)}</span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {asset.aiTags.map((tag) => (
+                                  <span key={`${asset.id}-${tag}`} className="rounded bg-primary/12 px-1 py-0.5 text-[10px] text-primary">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
+                </div>
+              </div>
             </section>
 
-            <section className="border-t border-border/70 pt-2">
-              <div className="mb-1.5 flex items-center justify-between">
-                <h2 className="text-sm font-semibold">AI 操作日志</h2>
-              </div>
-              <div className="space-y-1.5">
-                {assetLogs.map((log, index) => (
-                  <article
-                    key={`${index}-${log}`}
-                    className="group rounded-md border border-border bg-background/70 px-2 py-1.5 text-[11px]"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="pr-2">{log}</p>
-                      <div className="hidden shrink-0 gap-1 group-hover:flex group-focus-within:flex">
-                        <button className="rounded-md border border-border bg-card px-1.5 py-0.5 text-[10px]">
-                          试听
-                        </button>
-                        <button className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                          应用当前版本
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
           </aside>
 
           <section className="space-y-0 p-2 xl:border-r xl:border-border/70">
@@ -1633,9 +1771,6 @@ export default function App() {
                 <h2 className="text-sm font-semibold">AI 智能分析面板</h2>
               </div>
               <div className="space-y-2 rounded-md bg-background/70 p-2">
-                <div className="rounded-md border border-primary/20 bg-primary/10 px-2 py-1.5 text-[11px] text-primary">
-                  已选中 {selectedClipCount} 个片段，当前焦点：{assistantFocusLabel}
-                </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {assistantQuickPrompts.map((item) => (
                     <button
@@ -1648,6 +1783,9 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+                <p className="px-0.5 text-[10px] text-muted-foreground">
+                  已选中 {selectedClipCount} 个片段，当前焦点：{assistantFocusLabel}
+                </p>
 
                 {(assistantMessages.length > 0 || assistantThinking) && (
                   <div ref={assistantScrollContainerRef} className="max-h-[360px] space-y-2 overflow-y-auto rounded-md bg-card/60 p-2 pr-1">
