@@ -5,7 +5,21 @@ type AssetTab = 'sfx' | 'music' | 'voice' | 'my_assets'
 type LibrarySubTab = 'curated' | 'ai'
 type LibraryFilterTab = 'sfx' | 'music'
 type CuratedAsset = { name: string; tags: string[]; keywords: string[] }
-type MyAsset = { name: string; type: 'sfx' | 'music'; source: '收藏' | '上传' | '轨道导入'; aiTags: string[] }
+type ProjectAsset = {
+  id: string
+  name: string
+  category: 'video' | 'audio' | 'temp'
+  duration: string
+  resolution?: string
+  note?: string
+}
+type PersonalAsset = {
+  id: string
+  name: string
+  type: 'sfx' | 'music' | 'voice'
+  source: '收藏' | '项目升维' | 'AI创作'
+  aiTags: string[]
+}
 type ClipContextMenuState = {
   x: number
   y: number
@@ -185,7 +199,6 @@ const curatedVoices: CuratedAsset[] = [
   { name: '男生', tags: ['人声', '稳重', '旁白'], keywords: ['男声', '纪录片', '配音'] },
   { name: '京腔', tags: ['方言', '特色', '剧情'], keywords: ['北京话', '角色音', '方言配音'] },
 ]
-const mySfx = ['片头鼓点', '呼啸转场', '按钮点击']
 const curatedSfx: CuratedAsset[] = [
   { name: '赛博冲击', tags: ['赛博', '冲击', '转场'], keywords: ['科技感', '重击', '动作'] },
   { name: '自然雨声', tags: ['自然', '环境', '氛围'], keywords: ['雨滴', '白噪声', '背景'] },
@@ -194,7 +207,6 @@ const curatedSfx: CuratedAsset[] = [
   { name: '机械臂', tags: ['机械', '金属', '工业'], keywords: ['机器人', '关节', '运镜'] },
   { name: '能量脉冲', tags: ['科幻', '能量', '节奏'], keywords: ['脉冲', '电流', '未来感'] },
 ]
-const myMusic = ['晨间钢琴', '轻电子循环', '城市Lo-fi']
 const curatedMusic: CuratedAsset[] = [
   { name: '电影史诗', tags: ['史诗', '管弦', '大场面'], keywords: ['预告片', '宏大', '情绪推进'] },
   { name: '温暖民谣', tags: ['民谣', '温暖', '生活'], keywords: ['木吉他', 'Vlog', '轻松'] },
@@ -203,9 +215,16 @@ const curatedMusic: CuratedAsset[] = [
   { name: 'Future Bass', tags: ['电子', '动感', '青年'], keywords: ['drop', '活力', '科技发布'] },
   { name: '氛围环境', tags: ['Ambient', '铺底', '空间'], keywords: ['氛围', '空灵', '背景层'] },
 ]
-const initialMyAssets: MyAsset[] = [
-  { name: '品牌宣传BGM-v2', type: 'music', source: '上传', aiTags: ['品牌', '宣传', '温暖'] },
-  { name: '转场点击包-A', type: 'sfx', source: '上传', aiTags: ['转场', '点击', 'UI'] },
+const initialProjectAssets: ProjectAsset[] = [
+  { id: 'proj-video-1', name: 'brand-launch.mp4', category: 'video', duration: '01:42', resolution: '1920x1080' },
+  { id: 'proj-audio-1', name: '采访同期声-原始.wav', category: 'audio', duration: '00:58', note: '现场收音' },
+  { id: 'proj-temp-1', name: '临时生成-冲击转场-01.wav', category: 'temp', duration: '00:05', note: '待筛选' },
+]
+const initialPersonalAssets: PersonalAsset[] = [
+  { id: 'personal-music-1', name: '晨间钢琴', type: 'music', source: '收藏', aiTags: ['钢琴', '温暖', '叙事'] },
+  { id: 'personal-music-2', name: '轻电子循环', type: 'music', source: '收藏', aiTags: ['电子', '节奏', '科技'] },
+  { id: 'personal-sfx-1', name: '片头鼓点', type: 'sfx', source: '收藏', aiTags: ['冲击', '鼓点', '开场'] },
+  { id: 'personal-sfx-2', name: '呼啸转场', type: 'sfx', source: '收藏', aiTags: ['转场', '空气感', '速度'] },
 ]
 const assistantQuickPrompts = [
   { icon: '📝', label: '基础校对', prompt: '请做基础校对，检查文本漏读与错读。' },
@@ -257,6 +276,17 @@ const buildAiTags = (type: 'sfx' | 'music', blockName: string) => {
   ]
   const matched = rules.filter(([pattern]) => pattern.test(blockName)).map(([, tag]) => tag)
   return Array.from(new Set([...baseTags, ...matched, 'AI自动标注']))
+}
+
+const inferPersonalAssetType = (name: string): 'sfx' | 'music' => {
+  if (/bgm|music|配乐|钢琴|民谣|ambient|lo-?fi/i.test(name)) return 'music'
+  return 'sfx'
+}
+
+const formatAssetTypeLabel = (type: 'sfx' | 'music' | 'voice') => {
+  if (type === 'sfx') return '音效'
+  if (type === 'music') return '音乐'
+  return '音色'
 }
 
 const getCuratedTags = (assets: CuratedAsset[]) => Array.from(new Set(assets.flatMap((asset) => asset.tags)))
@@ -375,7 +405,11 @@ export default function App() {
   const [voiceIntensity, setVoiceIntensity] = useState('正常')
   const [voiceSpeed, setVoiceSpeed] = useState(1)
   const [voiceResult, setVoiceResult] = useState('')
-  const [uploadedAssets, setUploadedAssets] = useState<MyAsset[]>(initialMyAssets)
+  const [myAssetSubTab, setMyAssetSubTab] = useState<'project' | 'personal'>('project')
+  const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>(initialProjectAssets)
+  const [personalAssets, setPersonalAssets] = useState<PersonalAsset[]>(initialPersonalAssets)
+  const [personalAssetQuery, setPersonalAssetQuery] = useState('')
+  const [personalTagFilters, setPersonalTagFilters] = useState<string[]>([])
   const [timelineSelectionLabel, setTimelineSelectionLabel] = useState('01:10 - 01:45')
   const [smartLoading, setSmartLoading] = useState(false)
   const [smartTargetTab, setSmartTargetTab] = useState<'sfx' | 'music' | null>(null)
@@ -425,14 +459,17 @@ export default function App() {
   const filteredCuratedVoices = filterCuratedAssets(curatedVoices, toneQuery, selectedToneTags)
   const filteredCuratedSfx = filterCuratedAssets(curatedSfx, curatedQuery.sfx, selectedCuratedTags.sfx)
   const filteredCuratedMusic = filterCuratedAssets(curatedMusic, curatedQuery.music, selectedCuratedTags.music)
-  const myCollectionAssets: MyAsset[] = [
-    ...mySfx.map((name) => ({ name, type: 'sfx' as const, source: '收藏' as const, aiTags: buildAiTags('sfx', name) })),
-    ...myMusic.map((name) => ({ name, type: 'music' as const, source: '收藏' as const, aiTags: buildAiTags('music', name) })),
-    ...uploadedAssets,
-  ]
-  const myUploadedAssets = uploadedAssets.filter((asset) => asset.source === '上传')
-  const myGeneratedAssets = uploadedAssets.filter((asset) => asset.source === '轨道导入')
-  const myFavoriteAssets = myCollectionAssets.filter((asset) => asset.source === '收藏')
+  const projectVideoAssets = projectAssets.filter((asset) => asset.category === 'video')
+  const projectAudioAssets = projectAssets.filter((asset) => asset.category === 'audio')
+  const projectTempAssets = projectAssets.filter((asset) => asset.category === 'temp')
+  const allPersonalTags = Array.from(new Set(personalAssets.flatMap((asset) => asset.aiTags)))
+  const filteredPersonalAssets = personalAssets.filter((asset) => {
+    const searchText = `${asset.name} ${asset.type} ${asset.aiTags.join(' ')}`.toLowerCase()
+    const terms = personalAssetQuery.toLowerCase().split(/\s+/).filter(Boolean)
+    const queryMatched = terms.length === 0 || terms.every((term) => searchText.includes(term))
+    const tagsMatched = personalTagFilters.length === 0 || personalTagFilters.every((tag) => asset.aiTags.includes(tag))
+    return queryMatched && tagsMatched
+  })
   const selectedClipCount = selectedClipKey ? 1 : 0
   const assistantFocusLabel = selectedTrack
     ? `${selectedTrack.name} [${assistantRangeLabel}]`
@@ -764,13 +801,35 @@ export default function App() {
   const importClipAsAsset = () => {
     if (!clipContextMenu) return
     const { blockName, assetType } = clipContextMenu
-    const aiTags = buildAiTags(assetType, blockName)
-    const existingCount = uploadedAssets.filter((asset) => asset.type === assetType && asset.name.startsWith(blockName)).length
+    const existingCount = projectAssets.filter((asset) => asset.name.startsWith(blockName)).length
     const name = existingCount === 0 ? blockName : `${blockName}-${existingCount + 1}`
-    const nextAsset: MyAsset = { name, type: assetType, source: '轨道导入', aiTags }
-    setUploadedAssets((prev) => [nextAsset, ...prev])
+    const nextProjectAsset: ProjectAsset = {
+      id: `proj-${Date.now()}`,
+      name,
+      category: 'temp',
+      duration: assetType === 'music' ? '00:30' : '00:05',
+      note: `来自时间轴${assetType === 'music' ? '配乐' : '音效'}片段`,
+    }
+    setProjectAssets((prev) => [nextProjectAsset, ...prev])
     setAssetTab('my_assets')
+    setMyAssetSubTab('project')
     setClipContextMenu(null)
+  }
+
+  const promoteProjectAssetToPersonal = (assetId: string) => {
+    const target = projectAssets.find((item) => item.id === assetId)
+    if (!target) return
+    const type = inferPersonalAssetType(target.name)
+    const nextPersonalAsset: PersonalAsset = {
+      id: `personal-${Date.now()}`,
+      name: target.name,
+      type,
+      source: '项目升维',
+      aiTags: buildAiTags(type, target.name),
+    }
+    setPersonalAssets((prev) => [nextPersonalAsset, ...prev])
+    setProjectAssets((prev) => prev.filter((item) => item.id !== assetId))
+    setMyAssetSubTab('personal')
   }
 
   const applyCurrentTuning = () => {
@@ -1236,41 +1295,137 @@ export default function App() {
 
               {assetTab === 'my_assets' && (
                 <div className="space-y-2 text-xs">
-                  <div className="rounded-md border border-dashed border-primary/40 bg-primary/5 px-2 py-2 text-[11px] text-primary">
-                    拖拽音频文件/音效文件至此，AI将自动打标
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      onClick={() => setMyAssetSubTab('project')}
+                      className={`rounded-full border px-2 py-1 text-[11px] ${
+                        myAssetSubTab === 'project'
+                          ? 'border-primary/40 bg-primary/15 text-primary'
+                          : 'border-border bg-card text-muted-foreground'
+                      }`}
+                    >
+                      项目素材
+                    </button>
+                    <button
+                      onClick={() => setMyAssetSubTab('personal')}
+                      className={`rounded-full border px-2 py-1 text-[11px] ${
+                        myAssetSubTab === 'personal'
+                          ? 'border-primary/40 bg-primary/15 text-primary'
+                          : 'border-border bg-card text-muted-foreground'
+                      }`}
+                    >
+                      个人资产
+                    </button>
                   </div>
-                  <div className="space-y-2">
-                    {[
-                      { title: '个人上传', assets: myUploadedAssets },
-                      { title: 'AI 创作记录', assets: myGeneratedAssets },
-                      { title: '我的收藏', assets: myFavoriteAssets },
-                    ].map((section) => (
-                      <div key={section.title} className="rounded-md border border-border bg-background/70 p-2">
-                        <div className="mb-1 flex items-center justify-between">
-                          <p className="text-[11px] font-semibold">{section.title}</p>
-                          <span className="text-[10px] text-muted-foreground">{section.assets.length} 条</span>
-                        </div>
-                        <div className="space-y-1">
-                          {section.assets.length === 0 && <p className="text-[10px] text-muted-foreground">暂无内容</p>}
-                          {section.assets.map((asset) => (
-                            <article key={`${section.title}-${asset.type}-${asset.name}`} className="rounded-md border border-border bg-card px-2 py-1.5">
-                              <div className="flex items-center justify-between">
-                                <p className="truncate text-[11px] font-medium">{asset.name}</p>
-                                <span className="text-[10px] text-muted-foreground">{asset.type === 'sfx' ? '音效' : '音乐'}</span>
-                              </div>
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {asset.aiTags.map((tag) => (
-                                  <span key={`${asset.name}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
-                                    {tag}
-                                  </span>
-                                ))}
-                              </div>
-                            </article>
-                          ))}
-                        </div>
+
+                  {myAssetSubTab === 'project' ? (
+                    <div className="space-y-2">
+                      <div className="rounded-md border border-dashed border-primary/40 bg-primary/5 px-2 py-2 text-[11px] text-primary">
+                        拖拽视频/同期声/临时素材到项目中使用
                       </div>
-                    ))}
-                  </div>
+                      {[
+                        { title: '视频素材', assets: projectVideoAssets },
+                        { title: '同期声/原始录音', assets: projectAudioAssets },
+                        { title: '临时生成记录', assets: projectTempAssets },
+                      ].map((section) => (
+                        <div key={section.title} className="rounded-md border border-border bg-background/70 p-2">
+                          <div className="mb-1 flex items-center justify-between">
+                            <p className="text-[11px] font-semibold">{section.title}</p>
+                            <span className="text-[10px] text-muted-foreground">{section.assets.length} 条</span>
+                          </div>
+                          <div className="space-y-1">
+                            {section.assets.length === 0 && <p className="text-[10px] text-muted-foreground">暂无内容</p>}
+                            {section.assets.map((asset) => (
+                              <article key={asset.id} className="rounded-md border border-border bg-card px-2 py-1.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                                  <span className="text-[10px] text-muted-foreground">{asset.duration}</span>
+                                </div>
+                                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                                  {asset.category === 'video' ? `视频 · ${asset.resolution ?? '-'}` : asset.category === 'audio' ? '原始录音' : '临时产物'}
+                                  {asset.note ? ` · ${asset.note}` : ''}
+                                </p>
+                                {asset.category !== 'video' && (
+                                  <button
+                                    onClick={() => promoteProjectAssetToPersonal(asset.id)}
+                                    className="mt-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
+                                  >
+                                    ✨ 存入个人库
+                                  </button>
+                                )}
+                              </article>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <input
+                        value={personalAssetQuery}
+                        onChange={(event) => setPersonalAssetQuery(event.target.value)}
+                        placeholder="输入标签或自然语言描述搜索"
+                        className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+                      />
+                      <div className="flex flex-wrap gap-1 rounded-md border border-border bg-background/70 p-2">
+                        {allPersonalTags.map((tag) => {
+                          const active = personalTagFilters.includes(tag)
+                          return (
+                            <button
+                              key={tag}
+                              onClick={() =>
+                                setPersonalTagFilters((prev) =>
+                                  prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
+                                )
+                              }
+                              className={`rounded-md border px-1.5 py-0.5 text-[10px] ${
+                                active ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-card text-muted-foreground'
+                              }`}
+                            >
+                              {tag}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <div className="space-y-1 rounded-md border border-border bg-background/70 p-2">
+                        <p className="text-[11px] font-semibold">个人音效/BGM库</p>
+                        {filteredPersonalAssets.length === 0 && <p className="text-[10px] text-muted-foreground">没有匹配结果</p>}
+                        {filteredPersonalAssets.map((asset) => (
+                          <article key={asset.id} className="rounded-md border border-border bg-card px-2 py-1.5">
+                            <div className="flex items-center justify-between">
+                              <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                              <span className="text-[10px] text-muted-foreground">{formatAssetTypeLabel(asset.type)}</span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {asset.aiTags.map((tag) => (
+                                <span key={`${asset.id}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                      <div className="space-y-1 rounded-md border border-border bg-background/70 p-2">
+                        <p className="text-[11px] font-semibold">我的专属音色</p>
+                        {clonedVoiceItems.map((voiceName) => (
+                          <article key={voiceName} className="rounded-md border border-border bg-card px-2 py-1.5">
+                            <div className="flex items-center justify-between">
+                              <p className="truncate text-[11px] font-medium">{voiceName}</p>
+                              <span className="text-[10px] text-muted-foreground">音色</span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {['专属', '克隆音色', '可复用'].map((tag) => (
+                                <span key={`${voiceName}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
