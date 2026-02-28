@@ -5,8 +5,6 @@ type AssetTab = 'sfx' | 'music' | 'voice' | 'my_assets'
 type LibrarySubTab = 'curated' | 'ai'
 type LibraryFilterTab = 'sfx' | 'music'
 type MyAssetCategory = 'all' | 'sfx' | 'music'
-type ProofreadStatus = 'idle' | 'running' | 'done'
-type ProofreadIssueType = 'noise' | 'plosive' | 'misread'
 type CuratedAsset = { name: string; tags: string[]; keywords: string[] }
 type MyAsset = { name: string; type: 'sfx' | 'music'; source: '收藏' | '上传' | '轨道导入'; aiTags: string[] }
 type ClipContextMenuState = {
@@ -41,20 +39,27 @@ type MaterialTab = {
   split: boolean
   tracks: TrackRow[]
 }
-type ProofreadIssue = {
+type ProofreadIssueItem = {
   id: string
-  type: ProofreadIssueType
-  trackName: string
-  blockName: string
-  timeLabel: string
-  clipProgress: number
-  title: string
+  icon: string
+  levelLabel: string
+  levelColorClass: string
+  time: string
+  description: string
+  trackLabel: string
   originalText?: string
-  detectedText?: string
+  recognizedText?: string
 }
-type AssistantCardKind = 'bgm' | 'eq' | 'regenerate' | 'ducking'
-type AssistantCard = { id: string; kind: AssistantCardKind; title: string; description: string }
-type AssistantMessage = { id: string; role: 'user' | 'assistant'; text: string; cards?: AssistantCard[] }
+type AssistantMusicSuggestion = {
+  tracks: string[]
+}
+type AssistantMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  proofreadItems?: ProofreadIssueItem[]
+  musicSuggestion?: AssistantMusicSuggestion
+}
 
 const splitTracksTemplate: TrackRow[] = [
   { name: '视频', blocks: ['主画面片段', '补镜头片段'] },
@@ -209,8 +214,43 @@ const initialMyAssets: MyAsset[] = [
   { name: '品牌宣传BGM-v2', type: 'music', source: '上传', aiTags: ['品牌', '宣传', '温暖'] },
   { name: '转场点击包-A', type: 'sfx', source: '上传', aiTags: ['转场', '点击', 'UI'] },
 ]
-const assistantQuickPrompts = ['帮我听听配音和文案搭不搭', '推荐一个适合这段画面的BGM']
-const warmBgmCandidates = ['暖阳木吉他', '晨光叙事', '温柔片尾钢琴']
+const assistantQuickPrompts = [
+  { icon: '📝', label: '基础校对', prompt: '请做基础校对，检查文本漏读与错读。' },
+  { icon: '🎭', label: '情绪审查', prompt: '请审查配音情绪与文案、画面的适配度。' },
+  { icon: '🎬', label: '风格对齐', prompt: '请检查 BGM 与视频整体风格是否协调。' },
+  { icon: '🎵', label: '配乐推荐', prompt: '请根据当前画面给出配乐建议。' },
+]
+const demoProofreadItems: ProofreadIssueItem[] = [
+  {
+    id: 'noise-1',
+    icon: '🟡',
+    levelLabel: '杂音',
+    levelColorClass: 'text-amber-500',
+    time: '00:06.8',
+    description: '明显口水音',
+    trackLabel: '人声-说话人1 · 原声对白',
+  },
+  {
+    id: 'misread-1',
+    icon: '🔴',
+    levelLabel: '错音',
+    levelColorClass: 'text-red-500',
+    time: '00:12.4',
+    description: '错读字词',
+    trackLabel: '人声-说话人1 · 原声对白',
+    originalText: '角色',
+    recognizedText: '脚色',
+  },
+  {
+    id: 'plosive-1',
+    icon: '🟠',
+    levelLabel: '爆破音',
+    levelColorClass: 'text-orange-500',
+    time: '00:18.2',
+    description: '喷麦',
+    trackLabel: '人声-说话人1 · 原声对白',
+  },
+]
 
 const buildAiTags = (type: 'sfx' | 'music', blockName: string) => {
   const baseTags = type === 'sfx' ? ['音效', '轨道提取'] : ['音乐', '轨道提取']
@@ -289,38 +329,6 @@ const getDefaultClipLayout = (blockIndex: number) => ({
   width: blockIndex === 0 ? 38 : 22,
 })
 
-const getIssuePalette = (type: ProofreadIssueType) => {
-  if (type === 'misread') return { badge: '🔴 错音', badgeClass: 'border-red-300/70 bg-red-50 text-red-700' }
-  if (type === 'plosive') return { badge: '🟠 爆破音', badgeClass: 'border-orange-300/70 bg-orange-50 text-orange-700' }
-  return { badge: '🟡 杂音', badgeClass: 'border-yellow-300/70 bg-yellow-50 text-yellow-700' }
-}
-
-const buildProofreadIssues = (material: MaterialTab | undefined, hasCopy: boolean): ProofreadIssue[] => {
-  if (!material) return []
-  const voiceTracks = material.tracks.filter((row) => getTrackMeta(row.name).type === 'voice')
-  const mainTrack = voiceTracks[0] ?? material.tracks.find((row) => getTrackMeta(row.name).type !== 'video')
-  if (!mainTrack || mainTrack.blocks.length === 0) return []
-  const firstBlock = mainTrack.blocks[0]
-  const issues: ProofreadIssue[] = [
-    { id: `${material.id}-noise-1`, type: 'noise', trackName: mainTrack.name, blockName: firstBlock, timeLabel: '00:06.8', clipProgress: 24, title: '明显口水音' },
-    { id: `${material.id}-plosive-1`, type: 'plosive', trackName: mainTrack.name, blockName: firstBlock, timeLabel: '00:18.2', clipProgress: 56, title: '喷麦' },
-  ]
-  if (hasCopy) {
-    issues.splice(1, 0, {
-      id: `${material.id}-misread-1`,
-      type: 'misread',
-      trackName: mainTrack.name,
-      blockName: firstBlock,
-      timeLabel: '00:12.4',
-      clipProgress: 41,
-      title: '错读字词',
-      originalText: '角色',
-      detectedText: '脚色',
-    })
-  }
-  return issues
-}
-
 export default function App() {
   const [assetTab, setAssetTab] = useState<AssetTab>('sfx')
   const [myAssetCategory] = useState<MyAssetCategory>('all')
@@ -340,20 +348,11 @@ export default function App() {
   const [tuningTab, setTuningTab] = useState<'basic' | 'tone' | 'speed'>('basic')
   const [selectedToneByTrack, setSelectedToneByTrack] = useState<Record<string, string>>({})
   const [speechRateByTrack, setSpeechRateByTrack] = useState<Record<string, number>>({})
-  const [analysisPanelMode, setAnalysisPanelMode] = useState<'assistant' | 'proofread'>('assistant')
-  const [proofreadStatus, setProofreadStatus] = useState<ProofreadStatus>('idle')
-  const [proofreadProgress, setProofreadProgress] = useState(0)
-  const [proofreadHasCopy, setProofreadHasCopy] = useState<boolean | null>(null)
-  const [proofreadIssues, setProofreadIssues] = useState<ProofreadIssue[]>([])
-  const [proofreadPanelOpen, setProofreadPanelOpen] = useState(false)
-  const [proofreadDoneTipVisible, setProofreadDoneTipVisible] = useState(false)
-  const [copyConfirmOpen, setCopyConfirmOpen] = useState(false)
-  const [focusedIssueId, setFocusedIssueId] = useState('')
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([])
   const [assistantThinking, setAssistantThinking] = useState(false)
   const [assistantThinkingStep, setAssistantThinkingStep] = useState(0)
-  const [assistantRangeLabel, setAssistantRangeLabel] = useState('01:10 - 01:45')
+  const [assistantRangeLabel] = useState('01:10 - 01:45')
   const [assetLogs, setAssetLogs] = useState(aiLogs)
   const [librarySubTab, setLibrarySubTab] = useState<Record<'sfx' | 'music', LibrarySubTab>>({
     sfx: 'curated',
@@ -421,13 +420,13 @@ export default function App() {
   const filteredCuratedSfx = filterCuratedAssets(curatedSfx, curatedQuery.sfx, selectedCuratedTags.sfx)
   const filteredCuratedMusic = filterCuratedAssets(curatedMusic, curatedQuery.music, selectedCuratedTags.music)
   const myCollectionAssets: MyAsset[] = [
-    ...mySfx.map((name) => ({ name, type: 'sfx' as const, source: '收藏' as const, aiTags: [] })),
-    ...myMusic.map((name) => ({ name, type: 'music' as const, source: '收藏' as const, aiTags: [] })),
+    ...mySfx.map((name) => ({ name, type: 'sfx' as const, source: '收藏' as const, aiTags: buildAiTags('sfx', name) })),
+    ...myMusic.map((name) => ({ name, type: 'music' as const, source: '收藏' as const, aiTags: buildAiTags('music', name) })),
     ...uploadedAssets,
   ]
   const filteredMyAssets = myCollectionAssets.filter((asset) => myAssetCategory === 'all' || asset.type === myAssetCategory)
   const filteredUploadedAssets = uploadedAssets.filter((asset) => uploadCategory === 'all' || asset.type === uploadCategory)
-  const focusedIssue = proofreadIssues.find((issue) => issue.id === focusedIssueId)
+  const selectedClipCount = selectedClipKey ? 1 : 0
   const assistantFocusLabel = selectedTrack
     ? `${selectedTrack.name} [${assistantRangeLabel}]`
     : `人声轨 1 [${assistantRangeLabel}]`
@@ -495,35 +494,6 @@ export default function App() {
     }, 45)
     return () => clearInterval(timer)
   }, [comparePlayback.running])
-
-  useEffect(() => {
-    if (proofreadStatus !== 'running') return
-    const timer = setInterval(() => {
-      setProofreadProgress((prev) => {
-        const next = Math.min(prev + 5, 100)
-        if (next === 100) {
-          clearInterval(timer)
-          const issues = buildProofreadIssues(activeMaterial, Boolean(proofreadHasCopy))
-          setProofreadIssues(issues)
-          setProofreadPanelOpen(true)
-          setProofreadStatus('done')
-          setFocusedIssueId(issues[0]?.id ?? '')
-        }
-        return next
-      })
-    }, 160)
-    return () => clearInterval(timer)
-  }, [proofreadStatus, activeMaterial, proofreadHasCopy])
-
-  useEffect(() => {
-    if (proofreadIssues.length > 0 || proofreadStatus !== 'done') return
-    setProofreadDoneTipVisible(true)
-    const timer = setTimeout(() => {
-      setProofreadDoneTipVisible(false)
-      setProofreadPanelOpen(false)
-    }, 1200)
-    return () => clearTimeout(timer)
-  }, [proofreadIssues.length, proofreadStatus])
 
   useEffect(() => {
     if (!isRecording) return
@@ -686,36 +656,34 @@ export default function App() {
     setAssetLogs((prev) => [`配音生成：${voiceActor} · ${voiceEmotion}/${voiceIntensity}`, ...prev])
   }
 
-  const beginBasicProofread = (hasCopy: boolean) => {
-    setProofreadHasCopy(hasCopy)
-    setProofreadStatus('running')
-    setProofreadProgress(0)
-    setProofreadIssues([])
-    setProofreadPanelOpen(false)
-    setProofreadDoneTipVisible(false)
-    setFocusedIssueId('')
-  }
-
-  const startBasicProofread = () => {
-    if (proofreadStatus === 'running') return
-    setCopyConfirmOpen(true)
-  }
-
-  const focusIssue = (issue: ProofreadIssue) => {
-    if (!activeMaterial) return
-    setFocusedIssueId(issue.id)
-    setSelectedTrackKey(`${activeMaterial.id}::${issue.trackName}`)
-    setAssistantRangeLabel(`${issue.timeLabel} - ${issue.timeLabel}`)
-  }
-
-  const resolveIssue = (issue: ProofreadIssue, actionLabel: string) => {
-    setAssetLogs((prev) => [`基础校对处理：${issue.title}（${issue.timeLabel}）-> ${actionLabel}`, ...prev])
-    setProofreadIssues((prev) => prev.filter((item) => item.id !== issue.id))
-    if (focusedIssueId === issue.id) setFocusedIssueId('')
-  }
-
   const pushAssistantReply = (userText: string) => {
     const lower = userText.toLowerCase()
+    if (lower.includes('基础校对') || lower.includes('错读') || lower.includes('漏读') || lower.includes('校对')) {
+      setAssistantMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          text: 'AI回复：校对列表',
+          proofreadItems: demoProofreadItems,
+        },
+      ])
+      return
+    }
+    if (lower.includes('配乐') || lower.includes('bgm')) {
+      setAssistantMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          text: '收到。当前人声语速偏快且偏冷硬，和“温暖讲述”不完全匹配，建议先补氛围再调人声质感。',
+          musicSuggestion: {
+            tracks: ['暖阳木吉他', '晨光叙事', '温柔片尾钢琴'],
+          },
+        },
+      ])
+      return
+    }
     if (lower.includes('盖住') || lower.includes('听不清')) {
       setAssistantMessages((prev) => [
         ...prev,
@@ -723,7 +691,6 @@ export default function App() {
           id: `assistant-${Date.now()}`,
           role: 'assistant',
           text: '明白了。先做自动闪避，确保人声可懂度，再微调BGM电平。',
-          cards: [{ id: 'ducking', kind: 'ducking', title: '建议：人声闪避 (Auto-Ducking)', description: '避免BGM遮盖人声。' }],
         },
       ])
       return
@@ -734,11 +701,6 @@ export default function App() {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         text: '收到。当前人声语速偏快且偏冷硬，和“温暖讲述”不完全匹配，建议先补氛围再调人声质感。',
-        cards: [
-          { id: 'bgm', kind: 'bgm', title: '建议一：垫入情绪 BGM', description: '推荐 3 首温暖讲述类配乐。' },
-          { id: 'eq', kind: 'eq', title: '建议二：应用温暖讲述 EQ', description: '降低亮度、增强低频共鸣。' },
-          { id: 'regen', kind: 'regenerate', title: '建议三：重生成/标记重录', description: '从源头修复语速语气。' },
-        ],
       },
     ])
   }
@@ -755,12 +717,6 @@ export default function App() {
       setAssistantThinkingStep(assistantThinkingSteps.length)
       pushAssistantReply(text)
     }, 1200)
-  }
-
-  const onAssistantCardAction = (kind: AssistantCardKind, action: string) => {
-    setAssetLogs((prev) => [`AI助手：已执行 ${action}`, ...prev])
-    setAssistantMessages((prev) => [...prev, { id: `assistant-action-${Date.now()}`, role: 'assistant', text: `已执行：${action}` }])
-    if (kind === 'bgm') return
   }
 
   const openCloneDialog = () => {
@@ -936,7 +892,7 @@ export default function App() {
                           setSmartQueryByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: next }))
                           setCuratedQuery((prev) => ({ ...prev, [activeAssetLibraryTab]: next }))
                         }}
-                        placeholder="仅搜索库内资源..."
+                        placeholder="输入标签或自然语言描述搜索"
                         className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
                       />
                       {smartLoading && smartTargetTab === activeAssetLibraryTab && (
@@ -987,6 +943,16 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="mt-1 h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(2,132,199,0.3)_0,rgba(2,132,199,0.3)_2px,transparent_2px,transparent_7px)]" />
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {asset.tags.map((tag) => (
+                                  <span
+                                    key={`${asset.name}-${tag}`}
+                                    className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
                             </article>
                           ))}
                           {activeCuratedAssets.length === 0 && (
@@ -1435,226 +1401,156 @@ export default function App() {
             <section className="pb-2">
               <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">AI 智能分析面板</h2>
-                {proofreadDoneTipVisible && (
-                  <span className="rounded-md border border-emerald-300/60 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
-                    🎉 已完成所有基础校对
-                  </span>
-                )}
               </div>
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-1 text-xs">
-                  <button
-                    onClick={() => setAnalysisPanelMode('assistant')}
-                    className={`rounded-md border px-2 py-1.5 ${
-                      analysisPanelMode === 'assistant'
-                        ? 'border-primary/40 bg-primary/15 text-primary'
-                        : 'border-border bg-card text-muted-foreground'
-                    }`}
-                  >
-                    AI交互助手
-                  </button>
-                  <button
-                    onClick={() => setAnalysisPanelMode('proofread')}
-                    className={`rounded-md border px-2 py-1.5 ${
-                      analysisPanelMode === 'proofread'
-                        ? 'border-primary/40 bg-primary/15 text-primary'
-                        : 'border-border bg-card text-muted-foreground'
-                    }`}
-                  >
-                    基础校对
-                  </button>
+              <div className="space-y-2 rounded-md border border-border bg-background/70 p-2">
+                <div className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-[11px] text-primary">
+                  已选中 {selectedClipCount} 个片段，正在待命...（当前焦点：{assistantFocusLabel}）
                 </div>
-
-                {analysisPanelMode === 'assistant' ? (
-                  <div className="space-y-2 rounded-md border border-border bg-background/70 p-2">
-                    <div className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-[11px] text-primary">
-                      当前正在分析：{assistantFocusLabel}
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {assistantQuickPrompts.map((prompt) => (
-                        <button
-                          key={prompt}
-                          onClick={() => submitAssistantMessage(prompt)}
-                          className="rounded-full border border-border bg-card px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="max-h-[320px] space-y-2 overflow-y-auto rounded-md border border-border bg-card/60 p-2">
-                      {assistantMessages.length === 0 && !assistantThinking && (
-                        <p className="text-[11px] text-muted-foreground">从上方快捷问题开始，或直接输入你的“感觉描述”。</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {assistantQuickPrompts.map((item) => (
+                    <button
+                      key={item.label}
+                      onClick={() => submitAssistantMessage(item.prompt)}
+                      className="flex items-center gap-1 rounded-full border border-border bg-card px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+                    >
+                      <span>{item.icon}</span>
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+                {(assistantMessages.length > 0 || assistantThinking) && (
+                  <div className="max-h-[340px] space-y-2 overflow-y-auto rounded-md border border-border bg-card/60 p-2">
+                    {assistantMessages.map((message) => (
+                    <article
+                      key={message.id}
+                      className={`rounded-md border p-2 text-[11px] ${
+                        message.role === 'user'
+                          ? 'ml-6 border-primary/30 bg-primary/10 text-foreground'
+                          : 'mr-6 border-border bg-background text-foreground'
+                      }`}
+                    >
+                      <p className="mb-1 text-[10px] text-muted-foreground">{message.role === 'user' ? '你' : 'AI'}</p>
+                      <p>{message.text}</p>
+                      {message.proofreadItems && message.proofreadItems.length > 0 && (
+                        <div className="mt-2 space-y-2">
+                          {message.proofreadItems.map((item) => (
+                            <div key={item.id} className="rounded-md border border-border/80 bg-card/70 p-2">
+                              <div className="flex items-center gap-1.5">
+                                <span>{item.icon}</span>
+                                <span className={`font-semibold ${item.levelColorClass}`}>{item.levelLabel}</span>
+                              </div>
+                              <p className="mt-1 text-[10px] text-muted-foreground">{item.time}</p>
+                              <p className="mt-1">{item.description}</p>
+                              <p className="mt-1 text-[10px] text-muted-foreground">{item.trackLabel}</p>
+                              {item.originalText && item.recognizedText && (
+                                <p className="mt-1 text-[10px]">
+                                  原文：{item.originalText} | 识别：{item.recognizedText}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       )}
-                      {assistantMessages.map((message) => (
-                        <article
-                          key={message.id}
-                          className={`rounded-md border p-2 text-[11px] ${
-                            message.role === 'user'
-                              ? 'ml-6 border-primary/30 bg-primary/10 text-foreground'
-                              : 'mr-6 border-border bg-background text-foreground'
-                          }`}
-                        >
-                          <p className="mb-1 text-[10px] text-muted-foreground">{message.role === 'user' ? '你' : 'AI'}</p>
-                          <p>{message.text}</p>
-                          {message.cards && (
-                            <div className="mt-2 space-y-1.5">
-                              {message.cards.map((card) => (
-                                <div key={card.id} className="rounded-md border border-border bg-card p-2">
-                                  <p className="text-[11px] font-medium">{card.title}</p>
-                                  <p className="mt-0.5 text-[10px] text-muted-foreground">{card.description}</p>
-                                  {card.kind === 'bgm' && (
-                                    <div className="mt-1.5 space-y-1">
-                                      {warmBgmCandidates.map((name) => (
-                                        <div key={name} className="flex items-center justify-between rounded border border-border bg-background px-1.5 py-1">
-                                          <button onClick={() => onAssistantCardAction('bgm', `试听 ${name}`)} className="rounded-md border border-border px-1.5 py-0.5 text-[10px]">
-                                            ▶ 试听
-                                          </button>
-                                          <span className="truncate px-2 text-[10px]">{name}</span>
-                                        </div>
-                                      ))}
-                                      <button onClick={() => onAssistantCardAction('bgm', '一键添加到新轨道')} className="w-full rounded-md border border-primary/30 bg-primary/10 px-1.5 py-1 text-[10px] text-primary">
-                                        一键添加到新轨道
-                                      </button>
-                                    </div>
-                                  )}
-                                  {card.kind === 'eq' && (
-                                    <button onClick={() => onAssistantCardAction('eq', '应用“温暖讲述”EQ预设')} className="mt-1.5 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-1 text-[10px] text-primary">
-                                      应用“温暖讲述”EQ预设
-                                    </button>
-                                  )}
-                                  {card.kind === 'regenerate' && (
-                                    <div className="mt-1.5 flex flex-wrap gap-1">
-                                      <button onClick={() => onAssistantCardAction('regenerate', '使用现有音色重生成（温暖参数）')} className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-1 text-[10px] text-primary">
-                                        使用现有音色重生成（温暖参数）
-                                      </button>
-                                      <button onClick={() => onAssistantCardAction('regenerate', '生成重录批注单')} className="rounded-md border border-border px-1.5 py-1 text-[10px]">
-                                        生成重录批注单
-                                      </button>
-                                    </div>
-                                  )}
-                                  {card.kind === 'ducking' && (
-                                    <div className="mt-1.5 flex flex-wrap gap-1">
-                                      <button onClick={() => onAssistantCardAction('ducking', '一键应用：人声闪避 (Auto-Ducking)')} className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-1 text-[10px] text-primary">
-                                        一键应用：人声闪避 (Auto-Ducking)
-                                      </button>
-                                      <button onClick={() => onAssistantCardAction('ducking', '已将 BGM 轨道音量降低 3dB')} className="rounded-md border border-border px-1.5 py-1 text-[10px]">
-                                        BGM 降低 3dB
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
+                      {message.musicSuggestion && (
+                        <div className="mt-2 space-y-2 rounded-md border border-primary/20 bg-primary/5 p-2">
+                          <div>
+                            <p className="font-semibold text-[11px]">建议一：垫入情绪 BGM</p>
+                            <p className="mt-0.5 text-[10px] text-muted-foreground">推荐 3 首温暖讲述类配乐。</p>
+                            <div className="mt-1.5 space-y-1">
+                              {message.musicSuggestion.tracks.map((track) => (
+                                <button
+                                  key={track}
+                                  onClick={() => setAssetLogs((prev) => [`配乐试听：${track}`, ...prev])}
+                                  className="flex w-full items-center justify-start gap-1 rounded border border-border bg-card px-2 py-1 text-[10px] hover:border-primary/30"
+                                >
+                                  <span>▶ 试听</span>
+                                  <span>{track}</span>
+                                </button>
                               ))}
                             </div>
-                          )}
-                        </article>
-                      ))}
-                      {assistantThinking && (
-                        <div className="mr-6 rounded-md border border-border bg-background p-2 text-[11px]">
-                          <p className="mb-1 text-[10px] text-muted-foreground">AI 正在综合判断...</p>
-                          <div className="space-y-1">
-                            {assistantThinkingSteps.map((step, index) => (
-                              <p key={step} className={assistantThinkingStep > index ? 'text-foreground' : 'text-muted-foreground'}>
-                                ✔️ {step}
-                              </p>
-                            ))}
+                            <button
+                              onClick={() => {
+                                setAssetTab('music')
+                                setAssetLogs((prev) => ['已一键添加推荐配乐到新轨道（示意）', ...prev])
+                              }}
+                              className="mt-1.5 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
+                            >
+                              一键添加到新轨道
+                            </button>
+                          </div>
+
+                          <div className="border-t border-border/60 pt-1.5">
+                            <p className="font-semibold text-[11px]">建议二：应用温暖讲述 EQ</p>
+                            <p className="mt-0.5 text-[10px] text-muted-foreground">降低亮度、增强低频共鸣。</p>
+                            <button
+                              onClick={() => setAssetLogs((prev) => ['已应用“温暖讲述”EQ预设（示意）', ...prev])}
+                              className="mt-1.5 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
+                            >
+                              应用“温暖讲述”EQ预设
+                            </button>
+                          </div>
+
+                          <div className="border-t border-border/60 pt-1.5">
+                            <p className="font-semibold text-[11px]">建议三：重生成/标记重录</p>
+                            <p className="mt-0.5 text-[10px] text-muted-foreground">从源头修复语速语气。</p>
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              <button
+                                onClick={() => setAssetLogs((prev) => ['已使用现有音色重生成（温暖参数）（示意）', ...prev])}
+                                className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
+                              >
+                                使用现有音色重生成（温暖参数）
+                              </button>
+                              <button
+                                onClick={() => setAssetLogs((prev) => ['已生成重录批注单（示意）', ...prev])}
+                                className="rounded border border-border bg-card px-2 py-1 text-[10px]"
+                              >
+                                生成重录批注单
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}
-                    </div>
-                    <div className="flex gap-1.5">
-                      <input
-                        value={assistantInput}
-                        onChange={(event) => setAssistantInput(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') submitAssistantMessage()
-                        }}
-                        placeholder="输入你的感觉描述，例如：这段开场太干了，想温暖一些"
-                        className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
-                      />
-                      <button
-                        onClick={() => submitAssistantMessage()}
-                        disabled={!assistantInput.trim() || assistantThinking}
-                        className={`rounded-md border px-2 py-1 text-[11px] ${
-                          !assistantInput.trim() || assistantThinking
-                            ? 'cursor-not-allowed border-border bg-muted/40 text-muted-foreground'
-                            : 'border-primary/30 bg-primary/10 text-primary'
-                        }`}
-                      >
-                        发送
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <button
-                      onClick={startBasicProofread}
-                      disabled={proofreadStatus === 'running'}
-                      className={`inline-flex items-center px-0 py-0 text-xs underline-offset-2 ${
-                        proofreadStatus === 'running' ? 'cursor-not-allowed text-muted-foreground' : 'text-primary hover:underline'
-                      }`}
-                    >
-                      进行基础校对
-                    </button>
-                    <p className="text-[11px] text-muted-foreground">
-                      检测范围：{proofreadHasCopy === null ? '待确认文案状态' : proofreadHasCopy ? '错音 + 口水音/爆破音' : '口水音/爆破音'}
-                    </p>
-                    {proofreadStatus === 'running' && (
-                      <div className="rounded-md border border-border bg-background/70 p-2">
-                        <div className="mb-1 flex items-center justify-between text-[11px]">
-                          <span>AI 校对中...</span>
-                          <span className="text-primary">{proofreadProgress}%</span>
-                        </div>
-                        <div className="h-1.5 rounded bg-muted">
-                          <div className="h-full rounded bg-primary transition-[width] duration-150" style={{ width: `${proofreadProgress}%` }} />
+                    </article>
+                    ))}
+                    {assistantThinking && (
+                      <div className="mr-6 rounded-md border border-border bg-background p-2 text-[11px]">
+                        <p className="mb-1 text-[10px] text-muted-foreground">AI 正在综合判断...</p>
+                        <div className="space-y-1">
+                          {assistantThinkingSteps.map((step, index) => (
+                            <p key={step} className={assistantThinkingStep > index ? 'text-foreground' : 'text-muted-foreground'}>
+                              ✔️ {step}
+                            </p>
+                          ))}
                         </div>
                       </div>
                     )}
-                    <div
-                      className={`overflow-hidden rounded-md border border-border bg-background/60 transition-all duration-300 ${
-                        proofreadPanelOpen ? 'max-h-[520px] translate-x-0 opacity-100' : 'max-h-0 translate-x-4 opacity-0'
-                      }`}
-                    >
-                      <div className="border-b border-border/70 px-2 py-1.5 text-[11px] font-medium">校对列表</div>
-                      {proofreadIssues.length > 0 ? (
-                        <div className="max-h-[420px] space-y-1.5 overflow-y-auto p-2">
-                          {proofreadIssues.map((issue) => {
-                            const palette = getIssuePalette(issue.type)
-                            const focused = focusedIssue?.id === issue.id
-                            return (
-                              <article key={issue.id} className={`rounded-md border p-2 text-[11px] ${focused ? 'border-primary/40 bg-primary/5' : 'border-border bg-card/80'}`}>
-                                <button onClick={() => focusIssue(issue)} className="mb-1 block w-full text-left">
-                                  <div className="mb-1 flex items-center justify-between gap-2">
-                                    <span className={`rounded border px-1 py-0.5 text-[10px] ${palette.badgeClass}`}>{palette.badge}</span>
-                                    <span className="text-[10px] text-muted-foreground">{issue.timeLabel}</span>
-                                  </div>
-                                  <p className="font-medium">{issue.title}</p>
-                                  <p className="text-[10px] text-muted-foreground">{issue.trackName} · {issue.blockName}</p>
-                                </button>
-                                {issue.type === 'misread' ? (
-                                  <>
-                                    <p className="mb-1 text-[10px] text-muted-foreground">原文：{issue.originalText} | 识别：{issue.detectedText}</p>
-                                    <div className="flex flex-wrap gap-1 text-[10px]">
-                                      <button onClick={() => resolveIssue(issue, 'AI 生成替换')} className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary">AI 生成替换</button>
-                                      <button onClick={() => resolveIssue(issue, '标记重录')} className="rounded-md border border-orange-300/70 bg-orange-50 px-1.5 py-0.5 text-orange-700">标记重录</button>
-                                      <button onClick={() => resolveIssue(issue, '忽略')} className="rounded-md border border-border px-1.5 py-0.5">忽略</button>
-                                    </div>
-                                  </>
-                                ) : (
-                                  <div className="flex gap-1 text-[10px]">
-                                    <button onClick={() => resolveIssue(issue, '一键消除')} className="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary">一键消除</button>
-                                    <button onClick={() => resolveIssue(issue, '忽略')} className="rounded-md border border-border px-1.5 py-0.5">忽略</button>
-                                  </div>
-                                )}
-                              </article>
-                            )
-                          })}
-                        </div>
-                      ) : (
-                        <div className="p-2 text-[11px] text-muted-foreground">暂无待处理问题</div>
-                      )}
-                    </div>
-                  </>
+                  </div>
                 )}
+                <div className="flex gap-1.5">
+                  <textarea
+                    value={assistantInput}
+                    onChange={(event) => setAssistantInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault()
+                        submitAssistantMessage()
+                      }
+                    }}
+                    placeholder="可点击上方快捷指令，或在下方输入自然语言问题。例如：这段日军进村的画面，配现在的脚步声合适吗？"
+                    className="h-14 w-full resize-none rounded-md border border-border bg-card px-2 py-1.5 text-[11px] outline-none focus:border-primary/40"
+                  />
+                  <button
+                    onClick={() => submitAssistantMessage()}
+                    disabled={!assistantInput.trim() || assistantThinking}
+                    className={`rounded-md border px-2 py-1 text-[11px] ${
+                      !assistantInput.trim() || assistantThinking
+                        ? 'cursor-not-allowed border-border bg-muted/40 text-muted-foreground'
+                        : 'border-primary/30 bg-primary/10 text-primary'
+                    }`}
+                  >
+                    发送
+                  </button>
+                </div>
               </div>
             </section>
 
@@ -2115,35 +2011,6 @@ export default function App() {
                   }`}
                 >
                   开始克隆
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {copyConfirmOpen && (
-          <div className="fixed inset-0 z-[55] grid place-items-center bg-black/35 p-3" onClick={() => setCopyConfirmOpen(false)}>
-            <div className="w-full max-w-sm rounded-lg border border-border bg-card p-3 shadow-xl" onClick={(event) => event.stopPropagation()}>
-              <h3 className="text-sm font-semibold">请确认是否已关联文案？</h3>
-              <p className="mt-1 text-xs text-muted-foreground">已关联：检测错音 + 物理杂音；未关联：仅检测物理杂音。</p>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => {
-                    setCopyConfirmOpen(false)
-                    beginBasicProofread(true)
-                  }}
-                  className="rounded-md border border-primary/35 bg-primary/15 px-2 py-1.5 text-xs font-medium text-primary"
-                >
-                  已关联
-                </button>
-                <button
-                  onClick={() => {
-                    setCopyConfirmOpen(false)
-                    beginBasicProofread(false)
-                  }}
-                  className="rounded-md border border-border bg-background px-2 py-1.5 text-xs"
-                >
-                  未关联
                 </button>
               </div>
             </div>
