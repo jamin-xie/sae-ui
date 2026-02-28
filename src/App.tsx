@@ -374,6 +374,12 @@ export default function App() {
   const [voiceResult, setVoiceResult] = useState('')
   const [assetFolderStack, setAssetFolderStack] = useState<string[]>([])
   const [uploadedAssets, setUploadedAssets] = useState<MyAsset[]>(initialMyAssets)
+  const [timelineSelectionLabel, setTimelineSelectionLabel] = useState('01:10 - 01:45')
+  const [smartLoading, setSmartLoading] = useState(false)
+  const [smartTargetTab, setSmartTargetTab] = useState<'sfx' | 'music' | null>(null)
+  const [smartQueryByTab, setSmartQueryByTab] = useState<Record<'sfx' | 'music', string>>({ sfx: '', music: '' })
+  const [hoverPreviewAsset, setHoverPreviewAsset] = useState('')
+  const [smartActionMenuClip, setSmartActionMenuClip] = useState('')
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenuState | null>(null)
   const [selectedClipKey, setSelectedClipKey] = useState('')
   const [clipPlayback, setClipPlayback] = useState<ClipPlaybackState>({ clipKey: '', progress: 0, running: false })
@@ -436,6 +442,7 @@ export default function App() {
   const activeAssetLibraryTab = assetTab === 'music' ? 'music' : 'sfx'
   const activeCuratedAssets = assetTab === 'music' ? filteredCuratedMusic : filteredCuratedSfx
   const activeCuratedTags = assetTab === 'music' ? curatedMusicTags : curatedSfxTags
+  const smartSearchActive = Boolean(smartQueryByTab[activeAssetLibraryTab])
 
   useEffect(() => {
     if (!activeMaterial || activeMaterial.tracks.length === 0) return
@@ -559,6 +566,18 @@ export default function App() {
     return () => clearInterval(timer)
   }, [assistantThinking, assistantThinkingSteps.length])
 
+  useEffect(() => {
+    if (!hoverPreviewAsset || !selectedClipKey) return
+    setClipPlayback({ clipKey: selectedClipKey, progress: 0, running: true })
+  }, [hoverPreviewAsset, selectedClipKey])
+
+  useEffect(() => {
+    if (!smartActionMenuClip) return
+    const close = () => setSmartActionMenuClip('')
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [smartActionMenuClip])
+
 
   const addMaterialTab = () => {
     const newId = `mat-${Date.now()}`
@@ -642,6 +661,23 @@ export default function App() {
       [tab]: Array.from({ length: 4 }, (_, index) => `${prefix}变体 ${index + 1} · ${duration}s · E${emotion}/P${power}`),
     }))
     setAssetLogs((prev) => [`AI生成：${prefix} ${duration}s ×4（情绪${emotion}/力度${power}，提示词：${prompt}）`, ...prev])
+  }
+
+  const triggerSmartMatch = (target: 'sfx' | 'music') => {
+    setSmartTargetTab(target)
+    setSmartLoading(true)
+    setAssetTab(target)
+    setLibrarySubTab((prev) => ({ ...prev, [target]: 'curated' }))
+    window.setTimeout(() => {
+      const inferred =
+        target === 'sfx'
+          ? '✨ 抗日剧中日本军队进村时沉重的皮靴脚步声'
+          : '✨ 紧张悬疑但克制推进的战场氛围配乐'
+      setSmartQueryByTab((prev) => ({ ...prev, [target]: inferred }))
+      setCuratedQuery((prev) => ({ ...prev, [target]: inferred }))
+      setSmartLoading(false)
+      setAssetLogs((prev) => [`智能${target === 'sfx' ? '配音效' : '配乐'}：已解析片段 ${timelineSelectionLabel} 并自动完成检索。`, ...prev])
+    }, 1300)
   }
 
   const generateVoiceClip = () => {
@@ -895,10 +931,24 @@ export default function App() {
                     <>
                       <input
                         value={curatedQuery[activeAssetLibraryTab]}
-                        onChange={(event) => setCuratedQuery((prev) => ({ ...prev, [activeAssetLibraryTab]: event.target.value }))}
+                        onChange={(event) => {
+                          const next = event.target.value
+                          setSmartQueryByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: next }))
+                          setCuratedQuery((prev) => ({ ...prev, [activeAssetLibraryTab]: next }))
+                        }}
                         placeholder="仅搜索库内资源..."
                         className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
                       />
+                      {smartLoading && smartTargetTab === activeAssetLibraryTab && (
+                        <div className="rounded-md border border-border bg-background/70 p-2">
+                          <p className="mb-1 text-[11px] text-primary">AI 正在解读画面与情绪...</p>
+                          <div className="space-y-1">
+                            <div className="h-2 animate-pulse rounded bg-muted" />
+                            <div className="h-2 animate-pulse rounded bg-muted" />
+                            <div className="h-2 animate-pulse rounded bg-muted" />
+                          </div>
+                        </div>
+                      )}
                       <div className="rounded-md border border-border bg-background/60 p-2">
                         <div className="mb-1.5 flex flex-wrap gap-1">
                           {activeCuratedTags.map((tag) => {
@@ -920,12 +970,21 @@ export default function App() {
                           {activeCuratedAssets.map((asset) => (
                             <article
                               key={asset.name}
-                              onMouseEnter={() => setAssetLogs((prev) => [`悬停试听：${asset.name}`, ...prev])}
+                              onMouseEnter={() => {
+                                setHoverPreviewAsset(asset.name)
+                                setAssetLogs((prev) => [`画音同步试听：${asset.name}`, ...prev])
+                              }}
+                              onMouseLeave={() => setHoverPreviewAsset('')}
                               className="rounded-md border border-border bg-card/70 px-2 py-1.5"
                             >
                               <div className="flex items-center justify-between text-[11px]">
                                 <p className="truncate font-medium">{asset.name}</p>
-                                <span className="text-[10px] text-muted-foreground">{asset.name.length + 8}s · {80 + (asset.name.length % 50)}BPM</span>
+                                <div className="flex items-center gap-1">
+                                  {smartSearchActive && (
+                                    <span className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">💡 高优匹配</span>
+                                  )}
+                                  <span className="text-[10px] text-muted-foreground">{asset.name.length + 8}s · {80 + (asset.name.length % 50)}BPM</span>
+                                </div>
                               </div>
                               <div className="mt-1 h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(2,132,199,0.3)_0,rgba(2,132,199,0.3)_2px,transparent_2px,transparent_7px)]" />
                             </article>
@@ -1180,6 +1239,11 @@ export default function App() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     {activeMaterial ? `当前素材：${activeMaterial.title}` : '请在下方导入并选择视频素材'}
                   </p>
+                  {hoverPreviewAsset && (
+                    <p className="mt-1 text-[11px] text-primary">
+                      正在同步预览：{timelineSelectionLabel} · {hoverPreviewAsset}（已启用 Auto-Ducking）
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -1270,7 +1334,7 @@ export default function App() {
                                 <p className="text-[10px] text-muted-foreground">{isAudio ? '音频轨道' : '视频轨道'}</p>
                               </div>
                             </div>
-                            <div className="relative overflow-hidden bg-background p-1.5">
+                            <div className="relative overflow-visible bg-background p-1.5">
                               <div className="absolute inset-0 bg-[repeating-linear-gradient(to_right,transparent_0,transparent_95px,rgba(0,0,0,0.05)_96px)]" />
                               <div className="relative flex min-h-12 items-center gap-2">
                                 {row.blocks.map((block, blockIndex) => {
@@ -1282,6 +1346,12 @@ export default function App() {
                                       onClick={(event) => {
                                         event.stopPropagation()
                                         setSelectedClipKey(clipKey)
+                                        setSmartActionMenuClip('')
+                                        const startSecond = 70 + blockIndex * 18
+                                        const endSecond = startSecond + 35
+                                        const toLabel = (value: number) =>
+                                          `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`
+                                        setTimelineSelectionLabel(`${toLabel(startSecond)} - ${toLabel(endSecond)}`)
                                       }}
                                       onContextMenu={(event) => {
                                         if (!(meta.type === 'sfx' || meta.type === 'bgm')) return
@@ -1298,12 +1368,50 @@ export default function App() {
                                           assetType: meta.type === 'sfx' ? 'sfx' : 'music',
                                         })
                                       }}
-                                      className={`group relative overflow-hidden rounded-md border px-2 py-1 text-[11px] ${isAudio
+                                      className={`group relative rounded-md border px-2 py-1 text-[11px] ${isAudio
                                           ? 'border-sky-300/80 bg-sky-100 text-sky-900'
                                           : 'border-cyan-300/80 bg-cyan-100 text-cyan-900'
                                         } ${clipSelected ? 'ring-2 ring-primary/35' : ''}`}
                                       style={{ width: `${blockIndex === 0 ? 38 : 22}%` }}
                                     >
+                                      {clipSelected && (
+                                        <div className="absolute -right-1 -top-7 z-30">
+                                          <button
+                                            onClick={(event) => {
+                                              event.stopPropagation()
+                                              setSmartActionMenuClip((prev) => (prev === clipKey ? '' : clipKey))
+                                            }}
+                                            className="rounded-md border border-primary/35 bg-background px-1.5 py-0.5 text-[10px] text-primary shadow-sm"
+                                          >
+                                            ✨ 智能
+                                          </button>
+                                          {smartActionMenuClip === clipKey && (
+                                            <div
+                                              onClick={(event) => event.stopPropagation()}
+                                              className="mt-1 min-w-28 rounded-md border border-border bg-card p-1 text-[10px] text-foreground shadow-xl"
+                                            >
+                                              <button
+                                                onClick={() => {
+                                                  triggerSmartMatch('music')
+                                                  setSmartActionMenuClip('')
+                                                }}
+                                                className="block w-full rounded px-1.5 py-1 text-left hover:bg-accent/70"
+                                              >
+                                                ✨ 智能配乐
+                                              </button>
+                                              <button
+                                                onClick={() => {
+                                                  triggerSmartMatch('sfx')
+                                                  setSmartActionMenuClip('')
+                                                }}
+                                                className="block w-full rounded px-1.5 py-1 text-left hover:bg-accent/70"
+                                              >
+                                                ✨ 智能配音效
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
                                       <span className="relative z-10 truncate">{block}</span>
                                       {isAudio && (
                                         <span className="pointer-events-none absolute inset-0 opacity-35 [background:repeating-linear-gradient(90deg,transparent_0,transparent_6px,rgba(2,132,199,.45)_6px,rgba(2,132,199,.45)_8px)]" />
