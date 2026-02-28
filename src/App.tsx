@@ -4,7 +4,6 @@ type TrackRow = { name: string; blocks: string[] }
 type AssetTab = 'sfx' | 'music' | 'voice' | 'my_assets'
 type LibrarySubTab = 'curated' | 'ai'
 type LibraryFilterTab = 'sfx' | 'music'
-type MyAssetCategory = 'all' | 'sfx' | 'music'
 type CuratedAsset = { name: string; tags: string[]; keywords: string[] }
 type MyAsset = { name: string; type: 'sfx' | 'music'; source: '收藏' | '上传' | '轨道导入'; aiTags: string[] }
 type ClipContextMenuState = {
@@ -175,13 +174,7 @@ const getTrackTuning = (trackName: string) => {
   }
 }
 
-const aiLogs = [
-  'v1：自动拆轨完成，识别到 2 位说话人并提取人声。',
-  'v2：根据语义将 36 句口播自动标注为高兴/冷静/悲伤。',
-  'v3：对“说话人1”执行情绪迁移，高兴强度 40% -> 65%。',
-  'v4：优化齿音与鼻音，清晰度 +12%，保留原人声特征。',
-  'v5：生成对比版本，可一键回退到 v2 / v3 / v4。',
-]
+const aiLogs: string[] = []
 
 const initialClonedVoices = ['音色01', '音色02']
 const curatedVoices: CuratedAsset[] = [
@@ -329,10 +322,24 @@ const getDefaultClipLayout = (blockIndex: number) => ({
   width: blockIndex === 0 ? 38 : 22,
 })
 
+const parseTimelineTimeToPercent = (timeLabel: string) => {
+  const matched = timeLabel.match(/^(\d{2}):(\d{2}(?:\.\d+)?)$/)
+  if (!matched) return 0
+  const minutes = Number(matched[1])
+  const seconds = Number(matched[2])
+  const totalSeconds = minutes * 60 + seconds
+  // Timeline ruler is 00:00~00:50 visually; clamp in 60s window for stability.
+  return Math.max(0, Math.min(100, (totalSeconds / 60) * 100))
+}
+
+const getProofreadMarkerColorClass = (levelLabel: string) => {
+  if (levelLabel.includes('错')) return 'bg-red-500'
+  if (levelLabel.includes('爆')) return 'bg-orange-500'
+  return 'bg-amber-400'
+}
+
 export default function App() {
   const [assetTab, setAssetTab] = useState<AssetTab>('sfx')
-  const [myAssetCategory] = useState<MyAssetCategory>('all')
-  const [uploadCategory, setUploadCategory] = useState<MyAssetCategory>('all')
   const [materialTabs, setMaterialTabs] = useState<MaterialTab[]>(initialMaterialTabs)
   const [activeMaterialId, setActiveMaterialId] = useState(initialMaterialTabs[0].id)
   const [selectedTrackKey, setSelectedTrackKey] = useState(
@@ -359,9 +366,7 @@ export default function App() {
     music: 'curated',
   })
   const [aiGenPromptByTab, setAiGenPromptByTab] = useState<Record<'sfx' | 'music', string>>({ sfx: '', music: '' })
-  const [aiGenDurationByTab, setAiGenDurationByTab] = useState<Record<'sfx' | 'music', 3 | 5 | 10>>({ sfx: 5, music: 10 })
-  const [aiGenEmotionByTab, setAiGenEmotionByTab] = useState<Record<'sfx' | 'music', number>>({ sfx: 50, music: 50 })
-  const [aiGenPowerByTab, setAiGenPowerByTab] = useState<Record<'sfx' | 'music', number>>({ sfx: 50, music: 50 })
+  const [aiGenDurationByTab, setAiGenDurationByTab] = useState<Record<'sfx' | 'music', number>>({ sfx: 5, music: 60 })
   const [aiGenResultsByTab, setAiGenResultsByTab] = useState<Record<'sfx' | 'music', string[]>>({ sfx: [], music: [] })
   const [voiceStage, setVoiceStage] = useState<'main' | 'picker'>('main')
   const [voiceActor, setVoiceActor] = useState('魔天河')
@@ -369,9 +374,7 @@ export default function App() {
   const [voiceEmotion, setVoiceEmotion] = useState('冷静')
   const [voiceIntensity, setVoiceIntensity] = useState('正常')
   const [voiceSpeed, setVoiceSpeed] = useState(1)
-  const [voicePitch, setVoicePitch] = useState(0)
   const [voiceResult, setVoiceResult] = useState('')
-  const [assetFolderStack, setAssetFolderStack] = useState<string[]>([])
   const [uploadedAssets, setUploadedAssets] = useState<MyAsset[]>(initialMyAssets)
   const [timelineSelectionLabel, setTimelineSelectionLabel] = useState('01:10 - 01:45')
   const [smartLoading, setSmartLoading] = useState(false)
@@ -391,6 +394,7 @@ export default function App() {
     running: false,
     targetId: '',
   })
+  const [timelineTool, setTimelineTool] = useState<'select' | 'trim' | 'drag' | 'zoom'>('select')
   const [clonedVoiceItems, setClonedVoiceItems] = useState<string[]>(initialClonedVoices)
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const [cloneMethod, setCloneMethod] = useState<'record' | 'upload'>('record')
@@ -398,6 +402,8 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
   const [uploadedAudioName, setUploadedAudioName] = useState('')
+  const [voiceGroupCollapsedByMaterial, setVoiceGroupCollapsedByMaterial] = useState<Record<string, boolean>>({})
+  const [proofreadMarkersByTrack, setProofreadMarkersByTrack] = useState<Record<string, ProofreadIssueItem[]>>({})
   const activeMaterial = materialTabs.find((tab) => tab.id === activeMaterialId)
   const selectedTrackName = selectedTrackKey.split('::')[1]
   const selectedTrack = activeMaterial?.tracks.find((track) => track.name === selectedTrackName) ?? activeMaterial?.tracks[0]
@@ -424,8 +430,9 @@ export default function App() {
     ...myMusic.map((name) => ({ name, type: 'music' as const, source: '收藏' as const, aiTags: buildAiTags('music', name) })),
     ...uploadedAssets,
   ]
-  const filteredMyAssets = myCollectionAssets.filter((asset) => myAssetCategory === 'all' || asset.type === myAssetCategory)
-  const filteredUploadedAssets = uploadedAssets.filter((asset) => uploadCategory === 'all' || asset.type === uploadCategory)
+  const myUploadedAssets = uploadedAssets.filter((asset) => asset.source === '上传')
+  const myGeneratedAssets = uploadedAssets.filter((asset) => asset.source === '轨道导入')
+  const myFavoriteAssets = myCollectionAssets.filter((asset) => asset.source === '收藏')
   const selectedClipCount = selectedClipKey ? 1 : 0
   const assistantFocusLabel = selectedTrack
     ? `${selectedTrack.name} [${assistantRangeLabel}]`
@@ -442,6 +449,9 @@ export default function App() {
   const activeCuratedAssets = assetTab === 'music' ? filteredCuratedMusic : filteredCuratedSfx
   const activeCuratedTags = assetTab === 'music' ? curatedMusicTags : curatedSfxTags
   const smartSearchActive = Boolean(smartQueryByTab[activeAssetLibraryTab])
+  const firstVoiceTrackIndex = activeMaterial ? activeMaterial.tracks.findIndex((track) => track.name.startsWith('人声')) : -1
+  const activeVoiceTracks = activeMaterial ? activeMaterial.tracks.filter((track) => track.name.startsWith('人声')) : []
+  const activeVoiceGroupCollapsed = activeMaterial ? Boolean(voiceGroupCollapsedByMaterial[activeMaterial.id]) : false
 
   useEffect(() => {
     if (!activeMaterial || activeMaterial.tracks.length === 0) return
@@ -551,12 +561,13 @@ export default function App() {
 
   const addMaterialTab = () => {
     const newId = `mat-${Date.now()}`
+    const viewIndex = materialTabs.length + 1
     const newTab: MaterialTab = {
       id: newId,
-      title: `new-clip-${materialTabs.length + 1}.mp4`,
+      title: `时间轴视图 ${viewIndex}`,
       zoom: '100%',
       split: false,
-      tracks: [{ name: '视频', blocks: [`new-clip-${materialTabs.length + 1}.mp4`] }],
+      tracks: [{ name: '视频', blocks: [] }],
     }
     setMaterialTabs((prev) => [...prev, newTab])
     setActiveMaterialId(newId)
@@ -587,7 +598,6 @@ export default function App() {
       }),
     )
     setSelectedTrackKey(`${activeMaterial.id}::视频`)
-    setAssetLogs((prev) => [`拆轨完成：素材「${activeMaterial.title}」已拆分为视频/人声/音效/背景音轨。`, ...prev])
   }
 
   const toggleCuratedTag = (tab: LibraryFilterTab, tag: string) => {
@@ -624,13 +634,11 @@ export default function App() {
     if (!prompt) return
     const prefix = tab === 'sfx' ? '音效' : '音乐'
     const duration = aiGenDurationByTab[tab]
-    const emotion = aiGenEmotionByTab[tab]
-    const power = aiGenPowerByTab[tab]
     setAiGenResultsByTab((prev) => ({
       ...prev,
-      [tab]: Array.from({ length: 4 }, (_, index) => `${prefix}变体 ${index + 1} · ${duration}s · E${emotion}/P${power}`),
+      [tab]: Array.from({ length: 4 }, (_, index) => `${prefix}变体 ${index + 1} · ${duration}s`),
     }))
-    setAssetLogs((prev) => [`AI生成：${prefix} ${duration}s ×4（情绪${emotion}/力度${power}，提示词：${prompt}）`, ...prev])
+    setAssetLogs((prev) => [`AI生成：${prefix} ${duration}s ×4（提示词：${prompt}）`, ...prev])
   }
 
   const triggerSmartMatch = (target: 'sfx' | 'music') => {
@@ -646,19 +654,27 @@ export default function App() {
       setSmartQueryByTab((prev) => ({ ...prev, [target]: inferred }))
       setCuratedQuery((prev) => ({ ...prev, [target]: inferred }))
       setSmartLoading(false)
-      setAssetLogs((prev) => [`智能${target === 'sfx' ? '配音效' : '配乐'}：已解析片段 ${timelineSelectionLabel} 并自动完成检索。`, ...prev])
     }, 1300)
   }
 
   const generateVoiceClip = () => {
     if (!voiceScript.trim()) return
-    setVoiceResult(`已生成语音：${voiceActor} · ${voiceEmotion}/${voiceIntensity} · ${voiceSpeed.toFixed(1)}x · 语调${voicePitch > 0 ? '+' : ''}${voicePitch}`)
-    setAssetLogs((prev) => [`配音生成：${voiceActor} · ${voiceEmotion}/${voiceIntensity}`, ...prev])
+    setVoiceResult(`已生成语音：${voiceActor} · ${voiceEmotion}/${voiceIntensity} · ${voiceSpeed.toFixed(1)}x`)
   }
 
   const pushAssistantReply = (userText: string) => {
     const lower = userText.toLowerCase()
     if (lower.includes('基础校对') || lower.includes('错读') || lower.includes('漏读') || lower.includes('校对')) {
+      if (activeMaterial) {
+        const grouped: Record<string, ProofreadIssueItem[]> = {}
+        demoProofreadItems.forEach((item) => {
+          const trackName = item.trackLabel.split(' · ')[0]?.trim()
+          if (!trackName) return
+          const trackKey = `${activeMaterial.id}::${trackName}`
+          grouped[trackKey] = [...(grouped[trackKey] ?? []), item]
+        })
+        setProofreadMarkersByTrack((prev) => ({ ...prev, ...grouped }))
+      }
       setAssistantMessages((prev) => [
         ...prev,
         {
@@ -747,18 +763,13 @@ export default function App() {
 
   const importClipAsAsset = () => {
     if (!clipContextMenu) return
-    const { blockName, trackName, assetType } = clipContextMenu
+    const { blockName, assetType } = clipContextMenu
     const aiTags = buildAiTags(assetType, blockName)
     const existingCount = uploadedAssets.filter((asset) => asset.type === assetType && asset.name.startsWith(blockName)).length
     const name = existingCount === 0 ? blockName : `${blockName}-${existingCount + 1}`
     const nextAsset: MyAsset = { name, type: assetType, source: '轨道导入', aiTags }
     setUploadedAssets((prev) => [nextAsset, ...prev])
     setAssetTab('my_assets')
-    setUploadCategory(assetType)
-    setAssetLogs((prev) => [
-      `资产导入：已从${trackName}片段「${blockName}」导入到${assetType === 'sfx' ? '音效资产' : '音乐资产'}（AI标签：${aiTags.join(' / ')}）`,
-      ...prev,
-    ])
     setClipContextMenu(null)
   }
 
@@ -789,13 +800,144 @@ export default function App() {
     setCompareOpen(false)
     setCompareSource('current')
     setCompareHistoryId('')
-    setAssetLogs((prev) => [`精调应用：${selectedTrack.name} 已应用参数（${summary}）`, ...prev])
     const fallbackBlock = selectedTrack.blocks[0]
     const targetClipKey =
       selectedClipKey || (activeMaterial && fallbackBlock ? `${activeMaterial.id}::${selectedTrack.name}::${fallbackBlock}` : '')
     if (!targetClipKey) return
     setSelectedClipKey(targetClipKey)
     setClipPlayback({ clipKey: targetClipKey, progress: 0, running: true })
+  }
+
+  const renderTrackRow = (row: TrackRow, nested = false) => {
+    if (!activeMaterial) return null
+    const meta = getTrackMeta(row.name)
+    const isAudio = meta.type !== 'video'
+    const selected = selectedTrack?.name === row.name
+    const markerTrackKey = `${activeMaterial.id}::${row.name}`
+    const proofreadMarkers = proofreadMarkersByTrack[markerTrackKey] ?? []
+    return (
+      <div
+        key={`${activeMaterial.id}-${row.name}`}
+        onClick={() => setSelectedTrackKey(`${activeMaterial.id}::${row.name}`)}
+        className={`grid cursor-pointer grid-cols-[160px_minmax(0,1fr)] border-b border-border/70 transition last:border-b-0 ${nested ? 'bg-sky-50/20' : ''} ${
+          selected ? 'bg-primary/5' : ''
+        }`}
+      >
+        <div
+          className={`relative flex items-center gap-2 px-2 py-2 text-xs text-foreground ${nested ? 'pl-6' : ''} ${
+            selected ? 'bg-primary/10' : nested ? 'bg-sky-50/40' : 'bg-muted/30'
+          }`}
+        >
+          {nested && <span className="absolute bottom-2 left-2 top-2 w-px bg-sky-300/70" />}
+          <div className={`flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br ${meta.color} text-[10px] font-semibold text-white`}>
+            {meta.short}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-[11px] font-medium">{row.name}</p>
+            <p className="text-[10px] text-muted-foreground">{nested ? '人声子轨道' : isAudio ? '音频轨道' : '视频轨道'}</p>
+          </div>
+        </div>
+        <div className={`relative overflow-visible p-1.5 ${nested ? 'bg-sky-50/25' : 'bg-background'}`}>
+          <div className="absolute inset-0 bg-[repeating-linear-gradient(to_right,transparent_0,transparent_95px,rgba(0,0,0,0.05)_96px)]" />
+          <div className="relative flex min-h-12 items-center gap-2">
+            {proofreadMarkers.length > 0 && (
+              <div className="pointer-events-none absolute left-0 right-0 top-0 z-20 h-3">
+                {proofreadMarkers.map((marker) => (
+                  <span
+                    key={`${marker.id}-${marker.time}`}
+                    title={`${marker.levelLabel} ${marker.time} ${marker.description}`}
+                    className={`absolute top-0 inline-block h-2.5 w-2.5 -translate-x-1/2 rounded-full border border-white shadow ${getProofreadMarkerColorClass(marker.levelLabel)}`}
+                    style={{ left: `${parseTimelineTimeToPercent(marker.time)}%` }}
+                  />
+                ))}
+              </div>
+            )}
+            {row.blocks.length === 0 && <span className="text-[10px] text-muted-foreground">空轨道</span>}
+            {row.blocks.map((block, blockIndex) => {
+              const clipKey = `${activeMaterial.id}::${row.name}::${block}`
+              const clipSelected = selectedClipKey === clipKey
+              return (
+                <span
+                  key={block}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setSelectedClipKey(clipKey)
+                    setSmartActionMenuClip('')
+                    const startSecond = 70 + blockIndex * 18
+                    const endSecond = startSecond + 35
+                    const toLabel = (value: number) =>
+                      `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`
+                    setTimelineSelectionLabel(`${toLabel(startSecond)} - ${toLabel(endSecond)}`)
+                  }}
+                  onContextMenu={(event) => {
+                    if (!(meta.type === 'sfx' || meta.type === 'bgm')) return
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setSelectedClipKey(clipKey)
+                    setSelectedTrackKey(`${activeMaterial.id}::${row.name}`)
+                    setClipContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      materialId: activeMaterial.id,
+                      trackName: row.name,
+                      blockName: block,
+                      assetType: meta.type === 'sfx' ? 'sfx' : 'music',
+                    })
+                  }}
+                  className={`group relative rounded-md border px-2 py-1 text-[11px] ${
+                    isAudio ? 'border-sky-300/80 bg-sky-100 text-sky-900' : 'border-cyan-300/80 bg-cyan-100 text-cyan-900'
+                  } ${clipSelected ? 'ring-2 ring-primary/35' : ''}`}
+                  style={{ width: `${blockIndex === 0 ? 38 : 22}%` }}
+                >
+                  {clipSelected && (
+                    <div className="absolute -right-1 -top-7 z-30">
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setSmartActionMenuClip((prev) => (prev === clipKey ? '' : clipKey))
+                        }}
+                        className="rounded-md border border-primary/35 bg-background px-1.5 py-0.5 text-[10px] text-primary shadow-sm"
+                      >
+                        ✨ 智能
+                      </button>
+                      {smartActionMenuClip === clipKey && (
+                        <div
+                          onClick={(event) => event.stopPropagation()}
+                          className="mt-1 min-w-28 rounded-md border border-border bg-card p-1 text-[10px] text-foreground shadow-xl"
+                        >
+                          <button
+                            onClick={() => {
+                              triggerSmartMatch('music')
+                              setSmartActionMenuClip('')
+                            }}
+                            className="block w-full rounded px-1.5 py-1 text-left hover:bg-accent/70"
+                          >
+                            ✨ 智能配乐
+                          </button>
+                          <button
+                            onClick={() => {
+                              triggerSmartMatch('sfx')
+                              setSmartActionMenuClip('')
+                            }}
+                            className="block w-full rounded px-1.5 py-1 text-left hover:bg-accent/70"
+                          >
+                            ✨ 智能配音效
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <span className="relative z-10 truncate">{block}</span>
+                  {isAudio && (
+                    <span className="pointer-events-none absolute inset-0 opacity-35 [background:repeating-linear-gradient(90deg,transparent_0,transparent_6px,rgba(2,132,199,.45)_6px,rgba(2,132,199,.45)_8px)]" />
+                  )}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    )
   }
 
   const activePlayheadPercent = (() => {
@@ -928,7 +1070,6 @@ export default function App() {
                               key={asset.name}
                               onMouseEnter={() => {
                                 setHoverPreviewAsset(asset.name)
-                                setAssetLogs((prev) => [`画音同步试听：${asset.name}`, ...prev])
                               }}
                               onMouseLeave={() => setHoverPreviewAsset('')}
                               className="rounded-md border border-border bg-card/70 px-2 py-1.5"
@@ -985,10 +1126,10 @@ export default function App() {
                       <div>
                         <p className="mb-1 text-[10px] text-muted-foreground">时长</p>
                         <div className="flex gap-1">
-                          {[3, 5, 10].map((duration) => (
+                          {(activeAssetLibraryTab === 'music' ? [30, 60, 90] : [3, 5, 10]).map((duration) => (
                             <button
                               key={duration}
-                              onClick={() => setAiGenDurationByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: duration as 3 | 5 | 10 }))}
+                              onClick={() => setAiGenDurationByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: duration }))}
                               className={`rounded-md border px-2 py-0.5 text-[10px] ${
                                 aiGenDurationByTab[activeAssetLibraryTab] === duration
                                   ? 'border-primary/40 bg-primary/15 text-primary'
@@ -999,34 +1140,6 @@ export default function App() {
                             </button>
                           ))}
                         </div>
-                      </div>
-                      <div>
-                        <div className="mb-1 flex items-center justify-between text-[10px]">
-                          <span>情绪</span>
-                          <span>{aiGenEmotionByTab[activeAssetLibraryTab]}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={100}
-                          value={aiGenEmotionByTab[activeAssetLibraryTab]}
-                          onChange={(event) => setAiGenEmotionByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: Number(event.target.value) }))}
-                          className="h-1.5 w-full accent-[var(--primary)]"
-                        />
-                      </div>
-                      <div>
-                        <div className="mb-1 flex items-center justify-between text-[10px]">
-                          <span>力度</span>
-                          <span>{aiGenPowerByTab[activeAssetLibraryTab]}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={100}
-                          value={aiGenPowerByTab[activeAssetLibraryTab]}
-                          onChange={(event) => setAiGenPowerByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: Number(event.target.value) }))}
-                          className="h-1.5 w-full accent-[var(--primary)]"
-                        />
                       </div>
                       <button
                         onClick={() => triggerAssetAiGenerate(activeAssetLibraryTab)}
@@ -1065,7 +1178,9 @@ export default function App() {
                       <button onClick={() => setVoiceStage('picker')} className="w-full rounded-md border border-border bg-card px-2 py-1 text-left text-[11px]">
                         当前配音师：{voiceActor}（点击更换）
                       </button>
-                      <div className="flex flex-wrap gap-1">
+                      <div>
+                        <p className="mb-1 text-[10px] text-muted-foreground">情绪：</p>
+                        <div className="flex flex-wrap gap-1">
                         {['冷静', '欢快', '悲伤', '恐惧', '厌恶'].map((emotion) => (
                           <button
                             key={emotion}
@@ -1075,8 +1190,11 @@ export default function App() {
                             {emotion}
                           </button>
                         ))}
+                        </div>
                       </div>
-                      <div className="flex gap-1">
+                      <div>
+                        <p className="mb-1 text-[10px] text-muted-foreground">情绪强度：</p>
+                        <div className="flex gap-1">
                         {['正常', '很强', '非常强', '尖叫强', '极致强'].map((level) => (
                           <button
                             key={level}
@@ -1086,14 +1204,11 @@ export default function App() {
                             {level}
                           </button>
                         ))}
+                        </div>
                       </div>
                       <div>
                         <div className="mb-1 flex items-center justify-between text-[10px]"><span>语速</span><span>{voiceSpeed.toFixed(1)}x</span></div>
                         <input type="range" min={0.6} max={2} step={0.1} value={voiceSpeed} onChange={(e) => setVoiceSpeed(Number(e.target.value))} className="h-1.5 w-full accent-[var(--primary)]" />
-                      </div>
-                      <div>
-                        <div className="mb-1 flex items-center justify-between text-[10px]"><span>语调</span><span>{voicePitch > 0 ? '+' : ''}{voicePitch}</span></div>
-                        <input type="range" min={-10} max={10} step={1} value={voicePitch} onChange={(e) => setVoicePitch(Number(e.target.value))} className="h-1.5 w-full accent-[var(--primary)]" />
                       </div>
                       <button onClick={generateVoiceClip} className="w-full rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary">🪄 生成语音</button>
                       {voiceResult && <div className="rounded-md border border-border bg-card p-2 text-[11px]">{voiceResult}</div>}
@@ -1122,42 +1237,40 @@ export default function App() {
               {assetTab === 'my_assets' && (
                 <div className="space-y-2 text-xs">
                   <div className="rounded-md border border-dashed border-primary/40 bg-primary/5 px-2 py-2 text-[11px] text-primary">
-                    拖拽音频文件/文件夹至此，AI将自动打标
+                    拖拽音频文件/音效文件至此，AI将自动打标
                   </div>
-                  {assetFolderStack.length === 0 ? (
-                    <div className="space-y-1.5">
-                      {['个人上传', 'AI 创作记录', '我的收藏'].map((folder) => (
-                        <button
-                          key={folder}
-                          onClick={() => setAssetFolderStack(['我的资产', folder])}
-                          className="flex w-full items-center justify-between rounded-md border border-border bg-card px-2 py-1.5 text-left text-[11px]"
-                        >
-                          <span>📂 {folder}</span>
-                          <span className="text-[10px] text-muted-foreground">进入</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-md border border-border bg-background/70 p-2">
-                      <button onClick={() => setAssetFolderStack([])} className="mb-1 text-[10px] text-muted-foreground underline">
-                        &lt; {assetFolderStack.join(' / ')}
-                      </button>
-                      <div className="space-y-1">
-                        {(assetFolderStack[1] === '我的收藏' ? filteredMyAssets : filteredUploadedAssets).map((asset) => (
-                          <article key={`${asset.type}-${asset.name}`} className="rounded-md border border-border bg-card px-2 py-1.5">
-                            <p className="text-[11px] font-medium">{asset.name}</p>
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {asset.aiTags.map((tag) => (
-                                <span key={`${asset.name}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                          </article>
-                        ))}
+                  <div className="space-y-2">
+                    {[
+                      { title: '个人上传', assets: myUploadedAssets },
+                      { title: 'AI 创作记录', assets: myGeneratedAssets },
+                      { title: '我的收藏', assets: myFavoriteAssets },
+                    ].map((section) => (
+                      <div key={section.title} className="rounded-md border border-border bg-background/70 p-2">
+                        <div className="mb-1 flex items-center justify-between">
+                          <p className="text-[11px] font-semibold">{section.title}</p>
+                          <span className="text-[10px] text-muted-foreground">{section.assets.length} 条</span>
+                        </div>
+                        <div className="space-y-1">
+                          {section.assets.length === 0 && <p className="text-[10px] text-muted-foreground">暂无内容</p>}
+                          {section.assets.map((asset) => (
+                            <article key={`${section.title}-${asset.type}-${asset.name}`} className="rounded-md border border-border bg-card px-2 py-1.5">
+                              <div className="flex items-center justify-between">
+                                <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                                <span className="text-[10px] text-muted-foreground">{asset.type === 'sfx' ? '音效' : '音乐'}</span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {asset.aiTags.map((tag) => (
+                                  <span key={`${asset.name}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            </article>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
               )}
             </section>
@@ -1249,11 +1362,36 @@ export default function App() {
                   <button
                     onClick={addMaterialTab}
                     className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-md border border-border bg-card px-2 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-                    title="导入新素材"
+                    title="添加时间轴视图"
                   >
                     <span className="text-sm leading-none">+</span>
-                    <span>导入视频素材</span>
+                    <span>添加时间轴视图</span>
                   </button>
+                </div>
+                <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1.5">
+                  {[
+                    { key: 'select' as const, icon: '⌖', label: '选择' },
+                    { key: 'trim' as const, icon: '✂', label: '裁剪' },
+                    { key: 'drag' as const, icon: '✋', label: '拖动' },
+                    { key: 'zoom' as const, icon: '🔍', label: '缩放' },
+                  ].map((tool) => {
+                    const active = timelineTool === tool.key
+                    return (
+                      <button
+                        key={tool.key}
+                        onClick={() => setTimelineTool(tool.key)}
+                        title={tool.label}
+                        className={`flex h-7 w-7 items-center justify-center rounded-md border text-[13px] transition ${
+                          active
+                            ? 'border-primary/40 bg-primary/15 text-primary'
+                            : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        <span>{tool.icon}</span>
+                      </button>
+                    )
+                  })}
+                  <span className="ml-1 text-[11px] text-muted-foreground">当前工具：{timelineTool === 'select' ? '选择' : timelineTool === 'trim' ? '裁剪' : timelineTool === 'drag' ? '拖动' : '缩放'}</span>
                 </div>
                 {activeMaterial && (
                   <div className="overflow-hidden rounded-lg border border-border bg-card/90">
@@ -1275,118 +1413,32 @@ export default function App() {
                         className="pointer-events-none absolute bottom-0 top-0 z-30 w-[2px] bg-black/75"
                         style={{ left: `calc(160px + (100% - 160px) * ${activePlayheadPercent / 100})` }}
                       />
-                      {activeMaterial.tracks.map((row) => {
-                        const meta = getTrackMeta(row.name)
-                        const isAudio = meta.type !== 'video'
-                        const selected = selectedTrack?.name === row.name
+                      {activeMaterial.tracks.map((row, rowIndex) => {
+                        const isVoiceRow = row.name.startsWith('人声')
+                        if (!isVoiceRow) return renderTrackRow(row)
+                        if (rowIndex !== firstVoiceTrackIndex) return null
                         return (
-                          <div
-                            key={`${activeMaterial.id}-${row.name}`}
-                            onClick={() => setSelectedTrackKey(`${activeMaterial.id}::${row.name}`)}
-                            className={`grid cursor-pointer grid-cols-[160px_minmax(0,1fr)] border-b border-border/70 transition last:border-b-0 ${selected ? 'bg-primary/5' : ''
-                              }`}
-                          >
+                          <div key={`${activeMaterial.id}-voice-group`} className="border-b border-border/70 bg-sky-100/25">
                             <div
-                              className={`flex items-center gap-2 px-2 py-2 text-xs text-foreground ${selected ? 'bg-primary/10' : 'bg-muted/30'
-                                }`}
+                              onClick={() =>
+                                setVoiceGroupCollapsedByMaterial((prev) => ({ ...prev, [activeMaterial.id]: !activeVoiceGroupCollapsed }))
+                              }
+                              className="grid cursor-pointer grid-cols-[160px_minmax(0,1fr)] border-b border-sky-200/70"
                             >
-                              <div
-                                className={`flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br ${meta.color} text-[10px] font-semibold text-white`}
-                              >
-                                {meta.short}
+                              <div className="flex items-center gap-2 bg-sky-100/60 px-2 py-1.5">
+                                <span className="text-[11px]">{activeVoiceGroupCollapsed ? '▸' : '▾'}</span>
+                                <span className="rounded border border-sky-300/80 bg-sky-200/80 px-1 py-0.5 text-[10px] font-semibold text-sky-900">VOC</span>
+                                <div className="min-w-0">
+                                  <p className="truncate text-[11px] font-semibold text-sky-900">人声轨道组</p>
+                                  <p className="text-[10px] text-sky-800/80">{activeVoiceTracks.length} 位说话人</p>
+                                </div>
                               </div>
-                              <div className="min-w-0">
-                                <p className="truncate text-[11px] font-medium">{row.name}</p>
-                                <p className="text-[10px] text-muted-foreground">{isAudio ? '音频轨道' : '视频轨道'}</p>
-                              </div>
-                            </div>
-                            <div className="relative overflow-visible bg-background p-1.5">
-                              <div className="absolute inset-0 bg-[repeating-linear-gradient(to_right,transparent_0,transparent_95px,rgba(0,0,0,0.05)_96px)]" />
-                              <div className="relative flex min-h-12 items-center gap-2">
-                                {row.blocks.map((block, blockIndex) => {
-                                  const clipKey = `${activeMaterial.id}::${row.name}::${block}`
-                                  const clipSelected = selectedClipKey === clipKey
-                                  return (
-                                    <span
-                                      key={block}
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        setSelectedClipKey(clipKey)
-                                        setSmartActionMenuClip('')
-                                        const startSecond = 70 + blockIndex * 18
-                                        const endSecond = startSecond + 35
-                                        const toLabel = (value: number) =>
-                                          `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`
-                                        setTimelineSelectionLabel(`${toLabel(startSecond)} - ${toLabel(endSecond)}`)
-                                      }}
-                                      onContextMenu={(event) => {
-                                        if (!(meta.type === 'sfx' || meta.type === 'bgm')) return
-                                        event.preventDefault()
-                                        event.stopPropagation()
-                                        setSelectedClipKey(clipKey)
-                                        setSelectedTrackKey(`${activeMaterial.id}::${row.name}`)
-                                        setClipContextMenu({
-                                          x: event.clientX,
-                                          y: event.clientY,
-                                          materialId: activeMaterial.id,
-                                          trackName: row.name,
-                                          blockName: block,
-                                          assetType: meta.type === 'sfx' ? 'sfx' : 'music',
-                                        })
-                                      }}
-                                      className={`group relative rounded-md border px-2 py-1 text-[11px] ${isAudio
-                                          ? 'border-sky-300/80 bg-sky-100 text-sky-900'
-                                          : 'border-cyan-300/80 bg-cyan-100 text-cyan-900'
-                                        } ${clipSelected ? 'ring-2 ring-primary/35' : ''}`}
-                                      style={{ width: `${blockIndex === 0 ? 38 : 22}%` }}
-                                    >
-                                      {clipSelected && (
-                                        <div className="absolute -right-1 -top-7 z-30">
-                                          <button
-                                            onClick={(event) => {
-                                              event.stopPropagation()
-                                              setSmartActionMenuClip((prev) => (prev === clipKey ? '' : clipKey))
-                                            }}
-                                            className="rounded-md border border-primary/35 bg-background px-1.5 py-0.5 text-[10px] text-primary shadow-sm"
-                                          >
-                                            ✨ 智能
-                                          </button>
-                                          {smartActionMenuClip === clipKey && (
-                                            <div
-                                              onClick={(event) => event.stopPropagation()}
-                                              className="mt-1 min-w-28 rounded-md border border-border bg-card p-1 text-[10px] text-foreground shadow-xl"
-                                            >
-                                              <button
-                                                onClick={() => {
-                                                  triggerSmartMatch('music')
-                                                  setSmartActionMenuClip('')
-                                                }}
-                                                className="block w-full rounded px-1.5 py-1 text-left hover:bg-accent/70"
-                                              >
-                                                ✨ 智能配乐
-                                              </button>
-                                              <button
-                                                onClick={() => {
-                                                  triggerSmartMatch('sfx')
-                                                  setSmartActionMenuClip('')
-                                                }}
-                                                className="block w-full rounded px-1.5 py-1 text-left hover:bg-accent/70"
-                                              >
-                                                ✨ 智能配音效
-                                              </button>
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
-                                      <span className="relative z-10 truncate">{block}</span>
-                                      {isAudio && (
-                                        <span className="pointer-events-none absolute inset-0 opacity-35 [background:repeating-linear-gradient(90deg,transparent_0,transparent_6px,rgba(2,132,199,.45)_6px,rgba(2,132,199,.45)_8px)]" />
-                                      )}
-                                    </span>
-                                  )
-                                })}
+                              <div className="flex items-center justify-between bg-sky-50/80 px-2 py-1.5 text-[10px] text-sky-900/80">
+                                <span>说话人轨道分组</span>
+                                <span>{activeVoiceGroupCollapsed ? '已折叠' : '展开中'}</span>
                               </div>
                             </div>
+                            {!activeVoiceGroupCollapsed && activeVoiceTracks.map((voiceRow) => renderTrackRow(voiceRow, true))}
                           </div>
                         )
                       })}
@@ -1460,7 +1512,7 @@ export default function App() {
                               {message.musicSuggestion.tracks.map((track) => (
                                 <button
                                   key={track}
-                                  onClick={() => setAssetLogs((prev) => [`配乐试听：${track}`, ...prev])}
+                                  onClick={() => undefined}
                                   className="flex w-full items-center justify-start gap-1 rounded border border-border bg-card px-2 py-1 text-[10px] hover:border-primary/30"
                                 >
                                   <span>▶ 试听</span>
@@ -1471,7 +1523,6 @@ export default function App() {
                             <button
                               onClick={() => {
                                 setAssetTab('music')
-                                setAssetLogs((prev) => ['已一键添加推荐配乐到新轨道（示意）', ...prev])
                               }}
                               className="mt-1.5 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
                             >
@@ -1483,7 +1534,7 @@ export default function App() {
                             <p className="font-semibold text-[11px]">建议二：应用温暖讲述 EQ</p>
                             <p className="mt-0.5 text-[10px] text-muted-foreground">降低亮度、增强低频共鸣。</p>
                             <button
-                              onClick={() => setAssetLogs((prev) => ['已应用“温暖讲述”EQ预设（示意）', ...prev])}
+                              onClick={() => undefined}
                               className="mt-1.5 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
                             >
                               应用“温暖讲述”EQ预设
@@ -1495,13 +1546,13 @@ export default function App() {
                             <p className="mt-0.5 text-[10px] text-muted-foreground">从源头修复语速语气。</p>
                             <div className="mt-1.5 flex flex-wrap gap-1">
                               <button
-                                onClick={() => setAssetLogs((prev) => ['已使用现有音色重生成（温暖参数）（示意）', ...prev])}
+                                onClick={() => undefined}
                                 className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
                               >
                                 使用现有音色重生成（温暖参数）
                               </button>
                               <button
-                                onClick={() => setAssetLogs((prev) => ['已生成重录批注单（示意）', ...prev])}
+                                onClick={() => undefined}
                                 className="rounded border border-border bg-card px-2 py-1 text-[10px]"
                               >
                                 生成重录批注单
