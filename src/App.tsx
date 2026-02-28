@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type TrackRow = { name: string; blocks: string[] }
 type AssetTab = 'sfx' | 'music' | 'voice' | 'my_assets'
@@ -389,6 +389,8 @@ export default function App() {
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([])
   const [assistantThinking, setAssistantThinking] = useState(false)
   const [assistantThinkingStep, setAssistantThinkingStep] = useState(0)
+  const assistantScrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const assistantScrollAnchorRef = useRef<HTMLDivElement | null>(null)
   const [assistantRangeLabel] = useState('01:10 - 01:45')
   const [assetLogs, setAssetLogs] = useState(aiLogs)
   const [librarySubTab, setLibrarySubTab] = useState<Record<'sfx' | 'music', LibrarySubTab>>({
@@ -594,6 +596,27 @@ export default function App() {
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
   }, [smartActionMenuClip])
+
+  useEffect(() => {
+    const container = assistantScrollContainerRef.current
+    if (!container) return
+    const start = container.scrollTop
+    const target = container.scrollHeight - container.clientHeight
+    const distance = target - start
+    if (Math.abs(distance) < 1) return
+    const duration = 520
+    const startTime = performance.now()
+
+    const animate = (now: number) => {
+      const elapsed = now - startTime
+      const progress = Math.min(1, elapsed / duration)
+      const eased = 1 - (1 - progress) ** 3
+      container.scrollTop = start + distance * eased
+      if (progress < 1) requestAnimationFrame(animate)
+    }
+
+    requestAnimationFrame(animate)
+  }, [assistantMessages, assistantThinking])
 
 
   const addMaterialTab = () => {
@@ -1609,39 +1632,40 @@ export default function App() {
               <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">AI 智能分析面板</h2>
               </div>
-              <div className="space-y-2 rounded-md border border-border bg-background/70 p-2">
-                <div className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-[11px] text-primary">
-                  已选中 {selectedClipCount} 个片段，正在待命...（当前焦点：{assistantFocusLabel}）
+              <div className="space-y-2 rounded-md bg-background/70 p-2">
+                <div className="rounded-md border border-primary/20 bg-primary/10 px-2 py-1.5 text-[11px] text-primary">
+                  已选中 {selectedClipCount} 个片段，当前焦点：{assistantFocusLabel}
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {assistantQuickPrompts.map((item) => (
                     <button
                       key={item.label}
                       onClick={() => submitAssistantMessage(item.prompt)}
-                      className="flex items-center gap-1 rounded-full border border-border bg-card px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+                      className="flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-[11px] text-foreground hover:border-primary/35 hover:text-primary"
                     >
                       <span>{item.icon}</span>
-                      <span>{item.label}</span>
+                      <span className="truncate">{item.label}</span>
                     </button>
                   ))}
                 </div>
+
                 {(assistantMessages.length > 0 || assistantThinking) && (
-                  <div className="max-h-[340px] space-y-2 overflow-y-auto rounded-md border border-border bg-card/60 p-2">
+                  <div ref={assistantScrollContainerRef} className="max-h-[360px] space-y-2 overflow-y-auto rounded-md bg-card/60 p-2 pr-1">
                     {assistantMessages.map((message) => (
                     <article
                       key={message.id}
-                      className={`rounded-md border p-2 text-[11px] ${
+                      className={`rounded-md p-2.5 text-xs leading-relaxed ${
                         message.role === 'user'
-                          ? 'ml-6 border-primary/30 bg-primary/10 text-foreground'
-                          : 'mr-6 border-border bg-background text-foreground'
+                          ? 'ml-5 bg-primary/10 text-foreground'
+                          : 'mr-5 bg-background text-foreground'
                       }`}
                     >
-                      <p className="mb-1 text-[10px] text-muted-foreground">{message.role === 'user' ? '你' : 'AI'}</p>
+                      {message.role === 'assistant' && <p className="mb-1 text-[10px] font-semibold text-muted-foreground">AI 助手</p>}
                       <p>{message.text}</p>
                       {message.proofreadItems && message.proofreadItems.length > 0 && (
                         <div className="mt-2 space-y-2">
                           {message.proofreadItems.map((item) => (
-                            <div key={item.id} className="rounded-md border border-border/80 bg-card/70 p-2">
+                            <div key={item.id} className="rounded-md border border-border bg-card/70 p-2">
                               <div className="flex items-center gap-1.5">
                                 <span>{item.icon}</span>
                                 <span className={`font-semibold ${item.levelColorClass}`}>{item.levelLabel}</span>
@@ -1659,7 +1683,7 @@ export default function App() {
                         </div>
                       )}
                       {message.musicSuggestion && (
-                        <div className="mt-2 space-y-2 rounded-md border border-primary/20 bg-primary/5 p-2">
+                        <div className="mt-2 space-y-2 rounded-md bg-primary/5 p-2">
                           <div>
                             <p className="font-semibold text-[11px]">建议一：垫入情绪 BGM</p>
                             <p className="mt-0.5 text-[10px] text-muted-foreground">推荐 3 首温暖讲述类配乐。</p>
@@ -1668,7 +1692,7 @@ export default function App() {
                                 <button
                                   key={track}
                                   onClick={() => undefined}
-                                  className="flex w-full items-center justify-start gap-1 rounded border border-border bg-card px-2 py-1 text-[10px] hover:border-primary/30"
+                                  className="flex w-full items-center justify-start gap-1 rounded bg-card px-2 py-1 text-[10px] hover:bg-primary/5"
                                 >
                                   <span>▶ 试听</span>
                                   <span>{track}</span>
@@ -1679,36 +1703,36 @@ export default function App() {
                               onClick={() => {
                                 setAssetTab('music')
                               }}
-                              className="mt-1.5 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
+                              className="mt-1.5 rounded bg-primary/10 px-2 py-1 text-[10px] text-primary"
                             >
                               一键添加到新轨道
                             </button>
                           </div>
 
-                          <div className="border-t border-border/60 pt-1.5">
+                          <div className="pt-1.5">
                             <p className="font-semibold text-[11px]">建议二：应用温暖讲述 EQ</p>
                             <p className="mt-0.5 text-[10px] text-muted-foreground">降低亮度、增强低频共鸣。</p>
                             <button
                               onClick={() => undefined}
-                              className="mt-1.5 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
+                              className="mt-1.5 rounded bg-primary/10 px-2 py-1 text-[10px] text-primary"
                             >
                               应用“温暖讲述”EQ预设
                             </button>
                           </div>
 
-                          <div className="border-t border-border/60 pt-1.5">
+                          <div className="pt-1.5">
                             <p className="font-semibold text-[11px]">建议三：重生成/标记重录</p>
                             <p className="mt-0.5 text-[10px] text-muted-foreground">从源头修复语速语气。</p>
                             <div className="mt-1.5 flex flex-wrap gap-1">
                               <button
                                 onClick={() => undefined}
-                                className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary"
+                                className="rounded bg-primary/10 px-2 py-1 text-[10px] text-primary"
                               >
                                 使用现有音色重生成（温暖参数）
                               </button>
                               <button
                                 onClick={() => undefined}
-                                className="rounded border border-border bg-card px-2 py-1 text-[10px]"
+                                className="rounded bg-card px-2 py-1 text-[10px]"
                               >
                                 生成重录批注单
                               </button>
@@ -1719,8 +1743,8 @@ export default function App() {
                     </article>
                     ))}
                     {assistantThinking && (
-                      <div className="mr-6 rounded-md border border-border bg-background p-2 text-[11px]">
-                        <p className="mb-1 text-[10px] text-muted-foreground">AI 正在综合判断...</p>
+                      <div className="mr-5 rounded-md bg-background p-2 text-xs">
+                        <p className="mb-1 text-[10px] font-semibold text-muted-foreground">AI 正在综合判断...</p>
                         <div className="space-y-1">
                           {assistantThinkingSteps.map((step, index) => (
                             <p key={step} className={assistantThinkingStep > index ? 'text-foreground' : 'text-muted-foreground'}>
@@ -1730,32 +1754,37 @@ export default function App() {
                         </div>
                       </div>
                     )}
+                    <div ref={assistantScrollAnchorRef} />
                   </div>
                 )}
-                <div className="flex gap-1.5">
-                  <textarea
-                    value={assistantInput}
-                    onChange={(event) => setAssistantInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault()
-                        submitAssistantMessage()
-                      }
-                    }}
-                    placeholder="可点击上方快捷指令，或在下方输入自然语言问题。例如：这段日军进村的画面，配现在的脚步声合适吗？"
-                    className="h-14 w-full resize-none rounded-md border border-border bg-card px-2 py-1.5 text-[11px] outline-none focus:border-primary/40"
-                  />
-                  <button
-                    onClick={() => submitAssistantMessage()}
-                    disabled={!assistantInput.trim() || assistantThinking}
-                    className={`rounded-md border px-2 py-1 text-[11px] ${
-                      !assistantInput.trim() || assistantThinking
-                        ? 'cursor-not-allowed border-border bg-muted/40 text-muted-foreground'
-                        : 'border-primary/30 bg-primary/10 text-primary'
-                    }`}
-                  >
-                    发送
-                  </button>
+
+                <div className="rounded-md bg-card/70 p-2">
+                  <div className="relative">
+                    <textarea
+                      value={assistantInput}
+                      onChange={(event) => setAssistantInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault()
+                          submitAssistantMessage()
+                        }
+                      }}
+                      placeholder="可点击上方快捷指令，或在下方输入自然语言问题。例如：这段日军进村的画面，配现在的脚步声合适吗？"
+                      className="h-20 w-full resize-none rounded-md border border-primary/35 bg-background px-2 py-1.5 pr-16 text-xs outline-none focus:border-primary/55"
+                    />
+                    <button
+                      onClick={() => submitAssistantMessage()}
+                      disabled={!assistantInput.trim() || assistantThinking}
+                      className={`rounded-md px-2.5 py-1 text-[11px] ${
+                        !assistantInput.trim() || assistantThinking
+                          ? 'cursor-not-allowed bg-muted/40 text-muted-foreground'
+                          : 'bg-primary/10 text-primary'
+                      }`}
+                      style={{ position: 'absolute', right: '8px', bottom: '8px' }}
+                    >
+                      发送
+                    </button>
+                  </div>
                 </div>
               </div>
             </section>
