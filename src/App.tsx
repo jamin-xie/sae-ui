@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
 type TrackRow = { name: string; blocks: string[] }
-type AssetTab = 'sfx' | 'music' | 'my_assets' | 'ai_create'
-type CreateChannel = 'sfx' | 'music' | 'voice'
+type AssetTab = 'sfx' | 'music' | 'voice' | 'my_assets'
+type LibrarySubTab = 'curated' | 'ai'
 type LibraryFilterTab = 'sfx' | 'music'
 type MyAssetCategory = 'all' | 'sfx' | 'music'
 type ProofreadStatus = 'idle' | 'running' | 'done'
@@ -209,11 +209,6 @@ const initialMyAssets: MyAsset[] = [
   { name: '品牌宣传BGM-v2', type: 'music', source: '上传', aiTags: ['品牌', '宣传', '温暖'] },
   { name: '转场点击包-A', type: 'sfx', source: '上传', aiTags: ['转场', '点击', 'UI'] },
 ]
-const createChannelLabel: Record<CreateChannel, string> = {
-  sfx: '音效',
-  music: '音乐',
-  voice: '人声',
-}
 const assistantQuickPrompts = ['帮我听听配音和文案搭不搭', '推荐一个适合这段画面的BGM']
 const warmBgmCandidates = ['暖阳木吉他', '晨光叙事', '温柔片尾钢琴']
 
@@ -328,9 +323,8 @@ const buildProofreadIssues = (material: MaterialTab | undefined, hasCopy: boolea
 
 export default function App() {
   const [assetTab, setAssetTab] = useState<AssetTab>('sfx')
-  const [myAssetCategory, setMyAssetCategory] = useState<MyAssetCategory>('all')
+  const [myAssetCategory] = useState<MyAssetCategory>('all')
   const [uploadCategory, setUploadCategory] = useState<MyAssetCategory>('all')
-  const [uploadPanelOpen, setUploadPanelOpen] = useState(true)
   const [materialTabs, setMaterialTabs] = useState<MaterialTab[]>(initialMaterialTabs)
   const [activeMaterialId, setActiveMaterialId] = useState(initialMaterialTabs[0].id)
   const [selectedTrackKey, setSelectedTrackKey] = useState(
@@ -361,23 +355,24 @@ export default function App() {
   const [assistantThinkingStep, setAssistantThinkingStep] = useState(0)
   const [assistantRangeLabel, setAssistantRangeLabel] = useState('01:10 - 01:45')
   const [assetLogs, setAssetLogs] = useState(aiLogs)
-  const [createChannel, setCreateChannel] = useState<CreateChannel>('sfx')
-  const [createInputs, setCreateInputs] = useState<Record<CreateChannel, string>>({ sfx: '', music: '', voice: '' })
-  const [createGeneratingByChannel, setCreateGeneratingByChannel] = useState<Record<CreateChannel, boolean>>({
-    sfx: false,
-    music: false,
-    voice: false,
+  const [librarySubTab, setLibrarySubTab] = useState<Record<'sfx' | 'music', LibrarySubTab>>({
+    sfx: 'curated',
+    music: 'curated',
   })
-  const [createElapsedByChannel, setCreateElapsedByChannel] = useState<Record<CreateChannel, number>>({
-    sfx: 0,
-    music: 0,
-    voice: 0,
-  })
-  const [createResultByChannel, setCreateResultByChannel] = useState<Record<CreateChannel, string>>({
-    sfx: '',
-    music: '',
-    voice: '',
-  })
+  const [aiGenPromptByTab, setAiGenPromptByTab] = useState<Record<'sfx' | 'music', string>>({ sfx: '', music: '' })
+  const [aiGenDurationByTab, setAiGenDurationByTab] = useState<Record<'sfx' | 'music', 3 | 5 | 10>>({ sfx: 5, music: 10 })
+  const [aiGenEmotionByTab, setAiGenEmotionByTab] = useState<Record<'sfx' | 'music', number>>({ sfx: 50, music: 50 })
+  const [aiGenPowerByTab, setAiGenPowerByTab] = useState<Record<'sfx' | 'music', number>>({ sfx: 50, music: 50 })
+  const [aiGenResultsByTab, setAiGenResultsByTab] = useState<Record<'sfx' | 'music', string[]>>({ sfx: [], music: [] })
+  const [voiceStage, setVoiceStage] = useState<'main' | 'picker'>('main')
+  const [voiceActor, setVoiceActor] = useState('魔天河')
+  const [voiceScript, setVoiceScript] = useState('')
+  const [voiceEmotion, setVoiceEmotion] = useState('冷静')
+  const [voiceIntensity, setVoiceIntensity] = useState('正常')
+  const [voiceSpeed, setVoiceSpeed] = useState(1)
+  const [voicePitch, setVoicePitch] = useState(0)
+  const [voiceResult, setVoiceResult] = useState('')
+  const [assetFolderStack, setAssetFolderStack] = useState<string[]>([])
   const [uploadedAssets, setUploadedAssets] = useState<MyAsset[]>(initialMyAssets)
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenuState | null>(null)
   const [selectedClipKey, setSelectedClipKey] = useState('')
@@ -401,6 +396,7 @@ export default function App() {
   const activeMaterial = materialTabs.find((tab) => tab.id === activeMaterialId)
   const selectedTrackName = selectedTrackKey.split('::')[1]
   const selectedTrack = activeMaterial?.tracks.find((track) => track.name === selectedTrackName) ?? activeMaterial?.tracks[0]
+  const selectedTrackMeta = selectedTrack ? getTrackMeta(selectedTrack.name) : null
   const selectedTuning = selectedTrack ? getTrackTuning(selectedTrack.name) : null
   const trackVersions = selectedTrackKey ? trackVersionsByTrack[selectedTrackKey] ?? [] : []
   const originalVersion = trackVersions.find((version) => version.kind === 'original')
@@ -425,10 +421,6 @@ export default function App() {
   ]
   const filteredMyAssets = myCollectionAssets.filter((asset) => myAssetCategory === 'all' || asset.type === myAssetCategory)
   const filteredUploadedAssets = uploadedAssets.filter((asset) => uploadCategory === 'all' || asset.type === uploadCategory)
-  const createInput = createInputs[createChannel]
-  const createGenerating = createGeneratingByChannel[createChannel]
-  const createElapsed = createElapsedByChannel[createChannel]
-  const createResult = createResultByChannel[createChannel]
   const focusedIssue = proofreadIssues.find((issue) => issue.id === focusedIssueId)
   const assistantFocusLabel = selectedTrack
     ? `${selectedTrack.name} [${assistantRangeLabel}]`
@@ -441,6 +433,9 @@ export default function App() {
   const curatedVoiceTags = getCuratedTags(curatedVoices)
   const curatedSfxTags = getCuratedTags(curatedSfx)
   const curatedMusicTags = getCuratedTags(curatedMusic)
+  const activeAssetLibraryTab = assetTab === 'music' ? 'music' : 'sfx'
+  const activeCuratedAssets = assetTab === 'music' ? filteredCuratedMusic : filteredCuratedSfx
+  const activeCuratedTags = assetTab === 'music' ? curatedMusicTags : curatedSfxTags
 
   useEffect(() => {
     if (!activeMaterial || activeMaterial.tracks.length === 0) return
@@ -564,13 +559,6 @@ export default function App() {
     return () => clearInterval(timer)
   }, [assistantThinking, assistantThinkingSteps.length])
 
-  useEffect(() => {
-    if (!createGenerating) return
-    const timer = setInterval(() => {
-      setCreateElapsedByChannel((prev) => ({ ...prev, [createChannel]: prev[createChannel] + 1 }))
-    }, 1000)
-    return () => clearInterval(timer)
-  }, [createGenerating, createChannel])
 
   const addMaterialTab = () => {
     const newId = `mat-${Date.now()}`
@@ -623,11 +611,6 @@ export default function App() {
     })
   }
 
-  const clearCuratedFilter = (tab: LibraryFilterTab) => {
-    setCuratedQuery((prev) => ({ ...prev, [tab]: '' }))
-    setSelectedCuratedTags((prev) => ({ ...prev, [tab]: [] }))
-  }
-
   const toggleToneTag = (tag: string) => {
     setSelectedToneTags((prev) => (prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag]))
   }
@@ -647,22 +630,24 @@ export default function App() {
     setSpeechRateByTrack((prev) => ({ ...prev, [selectedTrackKey]: rate }))
   }
 
-  const sendCreatePrompt = () => {
-    const text = createInputs[createChannel].trim()
-    if (!text || createGenerating) return
-    setCreateGeneratingByChannel((prev) => ({ ...prev, [createChannel]: true }))
-    setCreateElapsedByChannel((prev) => ({ ...prev, [createChannel]: 0 }))
-    setCreateResultByChannel((prev) => ({ ...prev, [createChannel]: '' }))
-    window.setTimeout(() => {
-      const channelName = createChannelLabel[createChannel]
-      setCreateGeneratingByChannel((prev) => ({ ...prev, [createChannel]: false }))
-      setCreateElapsedByChannel((prev) => ({ ...prev, [createChannel]: 2 }))
-      setCreateResultByChannel((prev) => ({
-        ...prev,
-        [createChannel]: `${channelName}创作完成：基于“${text}”已生成 4 个候选版本（标准版/轻量版/强化版/情绪版）`,
-      }))
-      setAssetLogs((prev) => [`AI创作完成：${channelName}耗时 2s`, ...prev])
-    }, 2400)
+  const triggerAssetAiGenerate = (tab: 'sfx' | 'music') => {
+    const prompt = aiGenPromptByTab[tab].trim()
+    if (!prompt) return
+    const prefix = tab === 'sfx' ? '音效' : '音乐'
+    const duration = aiGenDurationByTab[tab]
+    const emotion = aiGenEmotionByTab[tab]
+    const power = aiGenPowerByTab[tab]
+    setAiGenResultsByTab((prev) => ({
+      ...prev,
+      [tab]: Array.from({ length: 4 }, (_, index) => `${prefix}变体 ${index + 1} · ${duration}s · E${emotion}/P${power}`),
+    }))
+    setAssetLogs((prev) => [`AI生成：${prefix} ${duration}s ×4（情绪${emotion}/力度${power}，提示词：${prompt}）`, ...prev])
+  }
+
+  const generateVoiceClip = () => {
+    if (!voiceScript.trim()) return
+    setVoiceResult(`已生成语音：${voiceActor} · ${voiceEmotion}/${voiceIntensity} · ${voiceSpeed.toFixed(1)}x · 语调${voicePitch > 0 ? '+' : ''}${voicePitch}`)
+    setAssetLogs((prev) => [`配音生成：${voiceActor} · ${voiceEmotion}/${voiceIntensity}`, ...prev])
   }
 
   const beginBasicProofread = (hasCopy: boolean) => {
@@ -777,7 +762,6 @@ export default function App() {
     const nextAsset: MyAsset = { name, type: assetType, source: '轨道导入', aiTags }
     setUploadedAssets((prev) => [nextAsset, ...prev])
     setAssetTab('my_assets')
-    setUploadPanelOpen(true)
     setUploadCategory(assetType)
     setAssetLogs((prev) => [
       `资产导入：已从${trackName}片段「${blockName}」导入到${assetType === 'sfx' ? '音效资产' : '音乐资产'}（AI标签：${aiTags.join(' / ')}）`,
@@ -862,20 +846,19 @@ export default function App() {
               </div>
               <div className="mb-2 grid grid-cols-4 gap-1 text-[11px]">
                 {[
-                  ['sfx', '音效资产'],
-                  ['music', '音乐资产'],
+                  ['sfx', '音效库'],
+                  ['music', '音乐库'],
+                  ['voice', '配音库'],
                   ['my_assets', '我的资产'],
-                  ['ai_create', 'AI创作'],
                 ].map(([key, label]) => {
                   const active = assetTab === key
                   return (
                     <button
                       key={key}
                       onClick={() => setAssetTab(key as AssetTab)}
-                      className={`whitespace-nowrap rounded-md border px-1.5 py-1 transition ${active
-                          ? 'border-primary/40 bg-primary/15 text-primary'
-                          : 'border-border bg-background text-muted-foreground hover:bg-accent/60'
-                        }`}
+                      className={`whitespace-nowrap rounded-md border px-1.5 py-1 transition ${
+                        active ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-background text-muted-foreground'
+                      }`}
                     >
                       {label}
                     </button>
@@ -883,305 +866,273 @@ export default function App() {
                 })}
               </div>
 
-              {assetTab === 'my_assets' && (
+              {(assetTab === 'sfx' || assetTab === 'music') && (
                 <div className="space-y-2 text-xs">
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'curated' }))}
+                      className={`rounded-full border px-2 py-1 text-[11px] ${
+                        librarySubTab[activeAssetLibraryTab] === 'curated'
+                          ? 'border-primary/40 bg-primary/15 text-primary'
+                          : 'border-border bg-card text-muted-foreground'
+                      }`}
+                    >
+                      优质{activeAssetLibraryTab === 'sfx' ? '音效' : '音乐'}库
+                    </button>
+                    <button
+                      onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))}
+                      className={`rounded-full border px-2 py-1 text-[11px] ${
+                        librarySubTab[activeAssetLibraryTab] === 'ai'
+                          ? 'border-primary/40 bg-primary/15 text-primary'
+                          : 'border-border bg-card text-muted-foreground'
+                      }`}
+                    >
+                      AI 创作
+                    </button>
+                  </div>
 
-                  <div className="border-t border-border/70 pt-2">
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <h3 className="text-xs font-semibold text-muted-foreground">我的上传</h3>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-muted-foreground">{filteredUploadedAssets.length} 条</span>
-                        <button
-                          onClick={() => setUploadPanelOpen((prev) => !prev)}
-                          className="rounded-md border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-                        >
-                          {uploadPanelOpen ? '收起' : '展开'}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-left text-[11px] text-primary">
-                        上传音效
-                      </button>
-                      <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1.5 text-left text-[11px] text-primary">
-                        上传音乐
-                      </button>
-                    </div>
-                    {uploadPanelOpen && (
-                      <div className="mt-1.5 space-y-1.5">
-                        <div className="flex gap-1">
-                          {[
-                            ['all', '全部'],
-                            ['sfx', '音效'],
-                            ['music', '音乐'],
-                          ].map(([key, label]) => {
-                            const active = uploadCategory === key
+                  {librarySubTab[activeAssetLibraryTab] === 'curated' ? (
+                    <>
+                      <input
+                        value={curatedQuery[activeAssetLibraryTab]}
+                        onChange={(event) => setCuratedQuery((prev) => ({ ...prev, [activeAssetLibraryTab]: event.target.value }))}
+                        placeholder="仅搜索库内资源..."
+                        className="h-8 w-full rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+                      />
+                      <div className="rounded-md border border-border bg-background/60 p-2">
+                        <div className="mb-1.5 flex flex-wrap gap-1">
+                          {activeCuratedTags.map((tag) => {
+                            const active = selectedCuratedTags[activeAssetLibraryTab].includes(tag)
                             return (
                               <button
-                                key={key}
-                                onClick={() => setUploadCategory(key as MyAssetCategory)}
-                                className={`rounded-md border px-2 py-1 text-[11px] ${active
-                                    ? 'border-primary/40 bg-primary/15 text-primary'
-                                    : 'border-border bg-card text-muted-foreground hover:text-foreground'
-                                  }`}
+                                key={tag}
+                                onClick={() => toggleCuratedTag(activeAssetLibraryTab, tag)}
+                                className={`rounded-md border px-1.5 py-0.5 text-[10px] ${
+                                  active ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-card text-muted-foreground'
+                                }`}
                               >
-                                {label}
+                                {tag}
                               </button>
                             )
                           })}
                         </div>
                         <div className="space-y-1">
-                          {filteredUploadedAssets.map((asset) => (
+                          {activeCuratedAssets.map((asset) => (
                             <article
-                              key={`upload-${asset.type}-${asset.name}`}
-                              className="rounded-md border border-border bg-background/60 px-2 py-1.5"
+                              key={asset.name}
+                              onMouseEnter={() => setAssetLogs((prev) => [`悬停试听：${asset.name}`, ...prev])}
+                              className="rounded-md border border-border bg-card/70 px-2 py-1.5"
                             >
-                              <div className="mb-1 flex items-center justify-between gap-2">
-                                <p className="truncate pr-2 text-[11px] font-medium">{asset.name}</p>
-                                <span className="shrink-0 text-[10px] text-primary">
-                                  {asset.type === 'sfx' ? '音效' : '音乐'}·{asset.source}
-                                </span>
+                              <div className="flex items-center justify-between text-[11px]">
+                                <p className="truncate font-medium">{asset.name}</p>
+                                <span className="text-[10px] text-muted-foreground">{asset.name.length + 8}s · {80 + (asset.name.length % 50)}BPM</span>
                               </div>
-                              {asset.aiTags.length > 0 && (
-                                <div className="flex flex-wrap gap-1">
-                                  {asset.aiTags.map((tag) => (
-                                    <span
-                                      key={`${asset.name}-${tag}`}
-                                      className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary"
-                                    >
-                                      {tag}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
+                              <div className="mt-1 h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(2,132,199,0.3)_0,rgba(2,132,199,0.3)_2px,transparent_2px,transparent_7px)]" />
                             </article>
+                          ))}
+                          {activeCuratedAssets.length === 0 && (
+                            <button
+                              onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))}
+                              className="text-[11px] text-primary underline"
+                            >
+                              没找到想要的？去 👉 AI创作 定制专属{activeAssetLibraryTab === 'sfx' ? '音效' : '音乐'}
+                            </button>
+                          )}
+                          {activeCuratedAssets.length > 0 && (
+                            <button
+                              onClick={() => setLibrarySubTab((prev) => ({ ...prev, [activeAssetLibraryTab]: 'ai' }))}
+                              className="pt-1 text-[10px] text-muted-foreground underline"
+                            >
+                              没找到想要的？去 👉 AI创作
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-2">
+                      <textarea
+                        value={aiGenPromptByTab[activeAssetLibraryTab]}
+                        onChange={(event) => setAiGenPromptByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: event.target.value }))}
+                        placeholder={`请输入描述，如：三个人在雨中泥泞奔跑...`}
+                        className="h-20 w-full rounded-md border border-border bg-card px-2 py-1.5 text-[11px] outline-none"
+                      />
+                      <div>
+                        <p className="mb-1 text-[10px] text-muted-foreground">时长</p>
+                        <div className="flex gap-1">
+                          {[3, 5, 10].map((duration) => (
+                            <button
+                              key={duration}
+                              onClick={() => setAiGenDurationByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: duration as 3 | 5 | 10 }))}
+                              className={`rounded-md border px-2 py-0.5 text-[10px] ${
+                                aiGenDurationByTab[activeAssetLibraryTab] === duration
+                                  ? 'border-primary/40 bg-primary/15 text-primary'
+                                  : 'border-border bg-card text-muted-foreground'
+                              }`}
+                            >
+                              {duration}秒
+                            </button>
                           ))}
                         </div>
                       </div>
-                    )}
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-semibold text-muted-foreground">我的收藏</h3>
-                    <span className="text-[10px] text-muted-foreground">{filteredMyAssets.length} 条</span>
-                  </div>
-                  <div className="flex gap-1">
-                    {[
-                      ['all', '全部'],
-                      ['sfx', '音效'],
-                      ['music', '音乐'],
-                    ].map(([key, label]) => {
-                      const active = myAssetCategory === key
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => setMyAssetCategory(key as MyAssetCategory)}
-                          className={`rounded-md border px-2 py-1 text-[11px] ${active
-                              ? 'border-primary/40 bg-primary/15 text-primary'
-                              : 'border-border bg-card text-muted-foreground hover:text-foreground'
-                            }`}
-                        >
-                          {label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {filteredMyAssets.map((asset) => (
-                      <article
-                        key={`${asset.type}-${asset.name}`}
-                        className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2"
-                      >
-                        <div className="h-8 w-8 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
-                        <div className="min-w-0">
-                          <p className="truncate text-[11px] font-medium">{asset.name}</p>
-                          <p className="text-[10px] text-primary">{asset.type === 'sfx' ? '音效' : '音乐'} · {asset.source}</p>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-[10px]">
+                          <span>情绪</span>
+                          <span>{aiGenEmotionByTab[activeAssetLibraryTab]}</span>
                         </div>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {assetTab === 'sfx' && (
-                <div className="space-y-2 text-xs">
-                  <div>
-                    <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">优质音效库</h3>
-                    <div className="mb-1.5 rounded-md border border-border bg-background/70 p-1.5">
-                      <p className="mb-1 text-[10px] text-muted-foreground">支持自然语言搜索</p>
-                      <div className="flex items-center gap-1.5">
                         <input
-                          value={curatedQuery.sfx}
-                          onChange={(event) => setCuratedQuery((prev) => ({ ...prev, sfx: event.target.value }))}
-                          placeholder="AI关键词搜索：赛博 冲击 转场"
-                          className="h-7 w-full rounded-md border border-border bg-card px-2 text-[11px] text-foreground outline-none focus:border-primary/40"
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={aiGenEmotionByTab[activeAssetLibraryTab]}
+                          onChange={(event) => setAiGenEmotionByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: Number(event.target.value) }))}
+                          className="h-1.5 w-full accent-[var(--primary)]"
                         />
-                        {(curatedQuery.sfx || selectedCuratedTags.sfx.length > 0) && (
-                          <button
-                            onClick={() => clearCuratedFilter('sfx')}
-                            className="h-7 shrink-0 rounded-md border border-border px-2 text-[11px] text-muted-foreground hover:text-foreground"
-                          >
-                            清除
-                          </button>
-                        )}
                       </div>
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {curatedSfxTags.map((tag) => {
-                          const active = selectedCuratedTags.sfx.includes(tag)
-                          return (
-                            <button
-                              key={tag}
-                              onClick={() => toggleCuratedTag('sfx', tag)}
-                              className={`rounded-md border px-1.5 py-0.5 text-[10px] ${active
-                                  ? 'border-primary/40 bg-primary/15 text-primary'
-                                  : 'border-border bg-card text-muted-foreground hover:text-foreground'
-                                }`}
-                            >
-                              {tag}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {filteredCuratedSfx.map((asset) => (
-                        <article
-                          key={asset.name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2 transition hover:border-primary/40"
-                        >
-                          <div className="h-10 w-10 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">{asset.name}</p>
-                            <p className="text-[10px] text-primary">智作优选</p>
-                          </div>
-                        </article>
-                      ))}
-                      {filteredCuratedSfx.length === 0 && (
-                        <p className="col-span-2 rounded-md border border-dashed border-border bg-background/70 p-2 text-[11px] text-muted-foreground">
-                          未命中音效结果，尝试更换关键词或减少标签。
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {assetTab === 'music' && (
-                <div className="space-y-2 text-xs">
-                  <div>
-                    <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">优质音乐库</h3>
-                    <div className="mb-1.5 rounded-md border border-border bg-background/70 p-1.5">
-                      <p className="mb-1 text-[10px] text-muted-foreground">支持自然语言搜索</p>
-                      <div className="flex items-center gap-1.5">
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-[10px]">
+                          <span>力度</span>
+                          <span>{aiGenPowerByTab[activeAssetLibraryTab]}</span>
+                        </div>
                         <input
-                          value={curatedQuery.music}
-                          onChange={(event) => setCuratedQuery((prev) => ({ ...prev, music: event.target.value }))}
-                          placeholder="AI关键词搜索：悬疑 节奏 电影"
-                          className="h-7 w-full rounded-md border border-border bg-card px-2 text-[11px] text-foreground outline-none focus:border-primary/40"
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={aiGenPowerByTab[activeAssetLibraryTab]}
+                          onChange={(event) => setAiGenPowerByTab((prev) => ({ ...prev, [activeAssetLibraryTab]: Number(event.target.value) }))}
+                          className="h-1.5 w-full accent-[var(--primary)]"
                         />
-                        {(curatedQuery.music || selectedCuratedTags.music.length > 0) && (
-                          <button
-                            onClick={() => clearCuratedFilter('music')}
-                            className="h-7 shrink-0 rounded-md border border-border px-2 text-[11px] text-muted-foreground hover:text-foreground"
-                          >
-                            清除
-                          </button>
-                        )}
                       </div>
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {curatedMusicTags.map((tag) => {
-                          const active = selectedCuratedTags.music.includes(tag)
-                          return (
-                            <button
-                              key={tag}
-                              onClick={() => toggleCuratedTag('music', tag)}
-                              className={`rounded-md border px-1.5 py-0.5 text-[10px] ${active
-                                  ? 'border-primary/40 bg-primary/15 text-primary'
-                                  : 'border-border bg-card text-muted-foreground hover:text-foreground'
-                                }`}
-                            >
-                              {tag}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {filteredCuratedMusic.map((asset) => (
-                        <article
-                          key={asset.name}
-                          className="flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2 transition hover:border-primary/40"
-                        >
-                          <div className="h-10 w-10 shrink-0 rounded-md bg-[linear-gradient(140deg,color-mix(in_oklch,var(--primary)_30%,var(--muted)),var(--muted))]" />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">{asset.name}</p>
-                            <p className="text-[10px] text-primary">智作优选</p>
-                          </div>
-                        </article>
-                      ))}
-                      {filteredCuratedMusic.length === 0 && (
-                        <p className="col-span-2 rounded-md border border-dashed border-border bg-background/70 p-2 text-[11px] text-muted-foreground">
-                          未命中音乐结果，尝试更换关键词或减少标签。
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {assetTab === 'ai_create' && (
-                <div className="space-y-2 text-xs">
-                  <div className="flex gap-1">
-                    {[
-                      ['sfx', '音效'],
-                      ['music', '音乐'],
-                      ['voice', '人声'],
-                    ].map(([key, label]) => {
-                      const active = createChannel === key
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => setCreateChannel(key as CreateChannel)}
-                          className={`rounded-md border px-2 py-1 text-[11px] ${
-                            active
-                              ? 'border-primary/40 bg-primary/15 text-primary'
-                              : 'border-border bg-card text-muted-foreground hover:text-foreground'
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <div className="rounded-md border border-border bg-background/70 p-2">
-                    <p className="mb-1 text-[10px] text-muted-foreground">当前创作类型：{createChannelLabel[createChannel]}</p>
-                    <textarea
-                        value={createInput}
-                        onChange={(event) =>
-                          setCreateInputs((prev) => ({ ...prev, [createChannel]: event.target.value }))
-                        }
-                        placeholder="请描述你的想法"
-                        className="h-24 w-full rounded-md border border-border bg-card px-2 py-1.5 text-[11px] outline-none focus:border-primary/40"
-                      />
-                    <div className="mt-1.5 flex items-center justify-between">
-                      <p className="text-[10px] text-muted-foreground">
-                        {createGenerating ? `生成中... 已耗时 ${createElapsed}s` : createResult ? `生成完成 · 用时 ${createElapsed}s` : '输入想法后点击生成'}
-                      </p>
                       <button
-                        onClick={sendCreatePrompt}
-                        disabled={!createInput.trim() || createGenerating}
-                        className={`rounded-md border px-2 text-[11px] ${
-                          createInput.trim() && !createGenerating
-                            ? 'border-primary/30 bg-primary/10 text-primary'
-                            : 'cursor-not-allowed border-border bg-muted/40 text-muted-foreground'
-                        }`}
+                        onClick={() => triggerAssetAiGenerate(activeAssetLibraryTab)}
+                        className="w-full rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary"
                       >
-                        生成
+                        🪄 立即生成
                       </button>
+                      {aiGenResultsByTab[activeAssetLibraryTab].length > 0 && (
+                        <div className="space-y-1.5">
+                          {aiGenResultsByTab[activeAssetLibraryTab].map((item) => (
+                            <article key={item} className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                              <div className="mb-1 flex items-center justify-between">
+                                <p className="text-[11px] font-medium">{item}</p>
+                                <span className="text-[10px] text-muted-foreground">可拖拽</span>
+                              </div>
+                              <div className="h-4 rounded bg-[repeating-linear-gradient(90deg,rgba(59,130,246,0.35)_0,rgba(59,130,246,0.35)_2px,transparent_2px,transparent_6px)]" />
+                            </article>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    {createResult && (
-                      <p className="mt-1.5 rounded-md border border-primary/25 bg-primary/10 px-2 py-1 text-[10px] text-primary">{createResult}</p>
-                    )}
+                  )}
+                </div>
+              )}
+
+              {assetTab === 'voice' && (
+                <div className="overflow-hidden rounded-md border border-border bg-background/70">
+                  <div className={`flex w-[200%] transition-transform duration-300 ${voiceStage === 'picker' ? '-translate-x-1/2' : 'translate-x-0'}`}>
+                    <div className="w-1/2 space-y-2 p-2 text-xs">
+                      <textarea
+                        value={voiceScript}
+                        onChange={(event) => setVoiceScript(event.target.value)}
+                        placeholder="请输入或粘贴需要配音的文案台词..."
+                        className="h-20 w-full rounded-md border border-border bg-card px-2 py-1.5 text-[11px] outline-none"
+                      />
+                      <button onClick={() => setVoiceStage('picker')} className="w-full rounded-md border border-border bg-card px-2 py-1 text-left text-[11px]">
+                        当前配音师：{voiceActor}（点击更换）
+                      </button>
+                      <div className="flex flex-wrap gap-1">
+                        {['冷静', '欢快', '悲伤', '恐惧', '厌恶'].map((emotion) => (
+                          <button
+                            key={emotion}
+                            onClick={() => setVoiceEmotion(emotion)}
+                            className={`rounded-md border px-1.5 py-0.5 text-[10px] ${voiceEmotion === emotion ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-card'}`}
+                          >
+                            {emotion}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex gap-1">
+                        {['正常', '很强', '非常强', '尖叫强', '极致强'].map((level) => (
+                          <button
+                            key={level}
+                            onClick={() => setVoiceIntensity(level)}
+                            className={`rounded-md border px-1.5 py-0.5 text-[10px] ${voiceIntensity === level ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border bg-card'}`}
+                          >
+                            {level}
+                          </button>
+                        ))}
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-[10px]"><span>语速</span><span>{voiceSpeed.toFixed(1)}x</span></div>
+                        <input type="range" min={0.6} max={2} step={0.1} value={voiceSpeed} onChange={(e) => setVoiceSpeed(Number(e.target.value))} className="h-1.5 w-full accent-[var(--primary)]" />
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-[10px]"><span>语调</span><span>{voicePitch > 0 ? '+' : ''}{voicePitch}</span></div>
+                        <input type="range" min={-10} max={10} step={1} value={voicePitch} onChange={(e) => setVoicePitch(Number(e.target.value))} className="h-1.5 w-full accent-[var(--primary)]" />
+                      </div>
+                      <button onClick={generateVoiceClip} className="w-full rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary">🪄 生成语音</button>
+                      {voiceResult && <div className="rounded-md border border-border bg-card p-2 text-[11px]">{voiceResult}</div>}
+                    </div>
+                    <div className="w-1/2 p-2 text-xs">
+                      <button onClick={() => setVoiceStage('main')} className="mb-2 rounded-md border border-border px-2 py-0.5 text-[10px]">&lt; 返回</button>
+                      <div className="space-y-1">
+                        {['魔天河', '陈雨沫', '周野', '林深', '阿木'].map((name) => (
+                          <button
+                            key={name}
+                            onClick={() => {
+                              setVoiceActor(name)
+                              setVoiceStage('main')
+                            }}
+                            className="w-full rounded-md border border-border bg-card px-2 py-1 text-left text-[11px]"
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
+                </div>
+              )}
+
+              {assetTab === 'my_assets' && (
+                <div className="space-y-2 text-xs">
+                  <div className="rounded-md border border-dashed border-primary/40 bg-primary/5 px-2 py-2 text-[11px] text-primary">
+                    拖拽音频文件/文件夹至此，AI将自动打标
+                  </div>
+                  {assetFolderStack.length === 0 ? (
+                    <div className="space-y-1.5">
+                      {['个人上传', 'AI 创作记录', '我的收藏'].map((folder) => (
+                        <button
+                          key={folder}
+                          onClick={() => setAssetFolderStack(['我的资产', folder])}
+                          className="flex w-full items-center justify-between rounded-md border border-border bg-card px-2 py-1.5 text-left text-[11px]"
+                        >
+                          <span>📂 {folder}</span>
+                          <span className="text-[10px] text-muted-foreground">进入</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-border bg-background/70 p-2">
+                      <button onClick={() => setAssetFolderStack([])} className="mb-1 text-[10px] text-muted-foreground underline">
+                        &lt; {assetFolderStack.join(' / ')}
+                      </button>
+                      <div className="space-y-1">
+                        {(assetFolderStack[1] === '我的收藏' ? filteredMyAssets : filteredUploadedAssets).map((asset) => (
+                          <article key={`${asset.type}-${asset.name}`} className="rounded-md border border-border bg-card px-2 py-1.5">
+                            <p className="text-[11px] font-medium">{asset.name}</p>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {asset.aiTags.map((tag) => (
+                                <span key={`${asset.name}-${tag}`} className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -1236,9 +1187,6 @@ export default function App() {
             <div className="pt-2">
               <div className="mb-1.5 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">专业级多轨界面</h2>
-                <div className="flex gap-2 text-xs">
-                  <button className="rounded-md border border-border px-2 py-1">对比</button>
-                </div>
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-1 overflow-x-auto">
@@ -1652,6 +1600,35 @@ export default function App() {
                       ))}
                     </div>
                   </div>
+
+                  {selectedTrackMeta?.type !== 'video' && (
+                    <div className="rounded-md border border-border bg-background/70 p-2">
+                      {selectedTrackMeta?.type === 'bgm' && (
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-medium">AI音乐延展</p>
+                          <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary">
+                            执行延展
+                          </button>
+                        </div>
+                      )}
+                      {selectedTrackMeta?.type === 'sfx' && (
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-medium">AI音效修改</p>
+                          <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary">
+                            智能修改
+                          </button>
+                        </div>
+                      )}
+                      {selectedTrackMeta?.type === 'voice' && (
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-medium">AI音色替换</p>
+                          <button className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] text-primary">
+                            选择替换
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {tuningTab === 'basic' && (
                     <>
